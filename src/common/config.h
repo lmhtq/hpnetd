@@ -13,6 +13,7 @@
 
 typedef struct config_variables config_variables_t;
 #define MAX_ARPS 1024
+#define MAX_ROUTES 1024
 #define _DEVELOP_
 
 /* struct of a NIC */
@@ -102,6 +103,17 @@ int add_to_arp_table(char *arp_line, int arp_idx);
 inline int add_to_arp_table_core(arp_info_t arp,
     char *dest_ip, char *prefix, char *dest_mac);
 
-int set_routes(char *route_config_file);
+/* init route table */
+int init_route_table();
+
+/* set route table */
+int set_route_table(char *route_config_file);
+
+/* add a route to route table */
+int add_to_route_table(char *route_line, int route_idx);
+
+/* add a route to route table core */
+inline int add_to_route_table_core(route_info_t route,
+    char *dest_ip, char *prefix, char *dev_name);
 
 #endif /* __CONFIG_H_ */
