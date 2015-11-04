@@ -243,9 +243,21 @@ send_burst(struct lcore_conf_t qconf, uint16_t n, uint8_t port);
 static inline int
 send_single_packet(struct rte_mbuf *m, uint8_t port);
 
-/* send packetsx4*/
+/* send packetsx4 */
 static inline __attribute__((always_inline)) void
 send_packetsx4(struct lcore_conf_t qconf, uint8_t port,
     rte_mbuf_t m[], uint32_t num);
+
+/* check whether the pkt is valid */
+#define DO_RFC_1812_CHECKS
+#ifdef DO_RFC_1812_CHECKS
+static inline int
+is_valid_ipv4_pkt(struct ipv4_hdr *pkt, uint32_t link_len);
+#endif /* DO_RFC_1812_CHECKS */
+
+/* l3fwd simple forward */
+static inline void
+l3fwd_simple_forward(struct rte_mbuf_t m, uint8_t port_id, 
+    lcore_conf_t qconf) __attribute__((unused));
 
 #endif
