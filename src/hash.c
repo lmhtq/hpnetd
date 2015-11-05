@@ -269,4 +269,148 @@ rfc1812_process(ipv4_hdr_t ipv4_hdr, uint16_t *dp, uint32_t flags)
 }
 #endif /* DO_RFC_1812_CHECKS */
 
+
+/* convert ipv4 tuple into host format */
+static void convert_ipv4_5tuple(ipv4_5tuple_t key1, 
+    ipv4_5tuple_host_t, key2)
+{
+    key2->ip_dst = rte_cpu_to_be_32(key1->ip_dst);
+    key2->ip_src = rte_cpu_to_be_32(key1->ip_src);
+    key2->port_dst = rte_cpu_to_be_16(key1->port_dst);
+    key2->port_src = rte_cpu_to_be_16(key1->port_src);
+    key2->proto = key1->proto;
+    key2->pad0 = 0;
+    key2->pad1 = 0;
+    return;
+}
+
+/* init ipv4_l3fwd_route_array */
+static int
+init_ipv4_l3fwd_route_array(void)
+{
+    /* TODO */
+}
+
+/* populate ipv4 few flow into table */
+static inline void
+populate_ipv4_few_flow_into_table(const rte_hash_t h)
+{
+    uint32_t i;
+    int32_t  ret;
+    uint32_t array_len = ipv4_l3fwd_num_routes;
+        
+    mask0 = _mm_set_epi32(ALL_32_BITS, ALL_32_BITS, 
+        ALL_32_BITS, BIT_8_TO_15);
+    for (i = 0; i < array_len; i++) {
+        struct ipv4_l3fwd_route entry;
+        union ipv4_5tuple_host  newkey;
+    
+        entry = ipv4_l3fwd_route_array[i];
+        convert_ipv4_5tuple(&entry.key, &newkey);
+        ret = rte_hash_add_key(h, (void *)&newkey);
+        if (ret < 0) {
+            rte_exit(EXIT_FAILURE, "Unable to add entry %" PRIu32
+                " to the l3fwd hash.\n", i);
+        }
+        ipv4_l3fwd_out_if[ret] = entry.if_out;
+    }
+    printf("Hash: Adding 0x%" PRIx32 " keys\n", array_len);
+
+}
+
+/* populate ipv4 many flow into table */
+#define NUMBER_PORT_USED 4
+static inline void
+populate_ipv4_many_flow_into_table(const rte_hash_t h, 
+    unsigned int nr_flow)
+{
+    unsigned i;
+    int32_t  ret;
+    uint8_t  a,b,c;
+    
+    mask0 = _mm_set_epi32(ALL_32_BITS, ALL_32_BITS,
+        ALL_32_BITS, BIT_8_TO_15);
+    for (i = 0; i < nr_flow; i++) {
+        struct ipv4_l3fwd_route entry;
+        union ipv4_5tuple_host  newkey;
+
+        /* why? */
+        a = (uint8_t) ((i/NUMBER_PORT_USED) % BYTE_VALUE_MAX);
+        b = (uint8_t) (((i/NUMBER_PORT_USED)/BYTE_VALUE_MAX)%
+            BYTE_VALUE_MAX);
+        c = (uint8_t) ((i/NUMBER_PORT_USED)/
+            (BYTE_VALUE_MAX*BYTE_VALUE_MAX));
+
+        /* create the ipv4 exact match flow */
+        memset(&entry, 0, sizeof(entry));
+        switch ( i & (NUMBER_PORT_USED - 1) ) {
+            case 0:
+                entry = ipv4_l3fwd_route_array[0];
+                entry.key.ip_dst = IPv4(101,c,b,a);/*Why?*/
+                break;
+            case 1:
+                entry = ipv4_l3fwd_route_array[1];
+                entry.key.ip_dst = IPv4(201,c,b,a);
+                break;
+            case 2:
+                entry = ipv4_l3fwd_route_array[2];
+                entry.key.ip_dst = IPv4(111,c,b,a);
+                break;
+            case 0:
+                entry = ipv4_l3fwd_route_array[3];
+                entry.key.ip_dst = IPv4(211,c,b,a);
+                break;
+
+        };
+
+        convert_ipv4_5tuple(&entry.key, &newkey);
+        ret = rte_hash_add_key(h, (void *)&newkey);
+        if (ret < 0) {
+            rte_exit(EXIT_FAILURE, "Unable to add entry %u\n", i);
+        }
+
+        ipv4_l3fwd_out_if[ret] = (uint8_t) entry.if_out;
+    }
+    printf("Hash: Adding 0x%x keys\n", nr_flow);
+}
+
+/* setup hash method for lookup */
+static void
+setup_hash(int socket_id)
+{
+    struct rte_hash_parameters ipv4_l3fwd_hash_params =
+    {
+        .name = NULL,
+        .entries = L3FWD_HASH_ENTRIES,
+        .bucket_entries = 4,
+        .key_len = sizeof(union ipv4_5tuple_host),
+        .hash_func = ipv4_hash_crc,
+        .hash_func_init_val = 0,
+    };
+
+    char s[64];
+
+    /* create ipv4 hash */
+    snprintf(s, sizeof(s), "ipv4_l3fed_hash_%d", socket_id);
+    ipv4_l3fwd_hash_params.name = s;
+    ipv4_l3fwd_hash_params.socket_id = socket_id;
+    ipv4_l3fwd_lookup_struct[socket_id] = 
+        rte_hash_create(&ipv4_l3fwd_hash_params);
+    if (ipv4_l3fwd_lookup_struct[socket_id] == NULL) {
+        rte_exit(EXIT_FAILURE, "Unable to create the l3fwd hash"
+            " on socket %d\n", socket_id);
+    }
+
+    if (hash_entry_number != HASH_ENTRY_NUMBER_DEFAULT) {
+        /* For testing hash matching with a large number of flows we
+         * generate millions of IP-5tuples with an incremented dst 
+         * address to init the hash table. */
+        populate_ipv4_many_flow_into_table(
+            ipv4_l3fwd_lookup_struct[socket_id], hash_entry_number);
+    } else {
+        populate_ipv4_few_flow_into_table(
+            ipv4_l3fwd_lookup_struct[socket_id]);
+    }
+}
+
 #endif /* LOOKUP_METHOD == LOOKUP_EXACT_MATCH */

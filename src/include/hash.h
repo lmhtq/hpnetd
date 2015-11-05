@@ -68,6 +68,7 @@ struct ipv4_5tuple
     uint16_t port_src;
     uint8_t proto;
 } __attribute__((__packed__)); 
+typedef ipv4_5tuple * ipv4_5tuple_t;
 
 /* union of ipv4_5tuple_host, struct ipv4_5tuple in host format */
 union ipv4_5tuple_host
@@ -84,6 +85,7 @@ union ipv4_5tuple_host
     };
     __m128i xmm;/* SSE 128bit int */
 };
+typedef ipv4_5tuple_host * ipv4_5tuple_host_t;
 
 /* struct of ipv4_l3fwd_route */
 struct ipv4_l3fwd_route
@@ -100,6 +102,7 @@ static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
 
 /* lookup structure */
 typedef struct rte_hash *lookup_struct_t;
+typedef struct rte_hash * rte_hash_t;
 static lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
 
 #ifdef RTE_ARCH_x86_64
@@ -175,6 +178,32 @@ rfc1812_process(ipv4_hdr_t ipv4_hdr, uint16_t *dp, uint32_t flags);
 #define rfc1812_process(mb, dp) do{} while(0)
 #endif /* DO_RFC_1812_CHECKS */
 
+/* convert ipv4 tuple into host format */
+static void convert_ipv4_5tuple(ipv4_5tuple_t key1, 
+    ipv4_5tuple_host_t, key2);
+
+
+/* init ipv4_l3fwd_route_array */
+static int
+init_ipv4_l3fwd_route_array(void);
+
+#define BYTE_VALUE_MAX 256
+#define ALL_32_BITS 0xffffffff
+#define BIT_8_TO_15 0x0000ff00
+
+/* populate ipv4 few flow into table */
+static inline void
+populate_ipv4_few_flow_into_table(const rte_hash_t h);
+
+/* populate ipv4 many flow into table */
+#define NUMBER_PORT_USED 4
+static inline void
+populate_ipv4_many_flow_into_table(const rte_hash_t h, 
+    unsigned int nr_flow);
+
+/* setup hash method for lookup */
+static void
+setup_hash(int socket_id);
 
 #endif /* LOOKUP_METHOD == LOOKUP_EXACT_MATCH */
 
