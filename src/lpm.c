@@ -298,4 +298,47 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
 
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
 
+
+/* setup LPM */
+static void
+setup_lpm(int socket_id)
+{
+    unsigned i;
+    int      ret;
+    char     s[64];
+
+    /* create the LPM table */
+    snprintf(s, sizeof(s), "IPV4_L3FWD_LPM_%d", socket_id);
+    ipv4_l3fwd_lookup_struct[socket_id] = rte_lpm_create(s, socket_id,
+        IPV4_L3FWD_LPM_MAX_RULES, 0);
+    if (ipv4_l3fwd_lookup_struct[socket_id] == NULL) {
+        rte_exit(EXIT_FAILURE, 
+            "Unable to create the l3fwd LPM table on socket %d\n", 
+            socket_id);
+    }
+
+    /* populate the LPM table */
+    for (i = 0; i < IPV4_L3FWD_LPM_MAX_RULES; i++) {
+        /* skip unused ports */
+        if ((1 << ipv4_l3fwd_route_array[i].if_out & 
+            enabled_port_mask) == 0)
+            continue;
+
+        ret = rte_lpm_add(ipv4_l3fwd_lookup_struct[socket_id], 
+            ipv4_l3fwd_route_array[i].ip,
+            ipv4_l3fwd_route_array[i].depth,
+            ipv4_l3fwd_route_array[i].if_out);
+
+        if (ret < 0) {
+            rte_exit(EXIT_FAILURE, "Unable to add entry %u to the "
+                "l3fwd LPM table on socket %d\n", i, socket_id);
+        }
+
+        printf("LPM: Adding route 0x%08x / %d (%d)\n", 
+            (unsigned)ipv4_l3fwd_route_array[i].ip,
+            ipv4_l3fwd_route_array[i].depth, 
+            ipv4_l3fwd_route_array[i].if_out);
+    }
+}
+
 #endif /* end for LOOKUP_METHOD == LOOKUP_LPM */

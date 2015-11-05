@@ -128,6 +128,10 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
 
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
 
+/* setup LPM */
+static void
+setup_lpm(int socket_id);
+
 #endif /* LOOKUP_METHOD == LOOKUP_LPM */
 
 #endif /* __LPM_H_ */
