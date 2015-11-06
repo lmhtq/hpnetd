@@ -215,8 +215,8 @@ static struct rte_eth_conf port_conf = {
 };
 
 /* pktmbuf pool */
-typedef struct rte_pool *rte_pool_t;
-static rte_pool_t pktbuf_pool[NB_SOCKETS];
+typedef struct rte_mempool *rte_mempool_t;
+static rte_mempool_t pktmbuf_pool[NB_SOCKETS];
 
 /* config of lcore */
 struct lcore_conf
@@ -259,5 +259,21 @@ is_valid_ipv4_pkt(struct ipv4_hdr *pkt, uint32_t link_len);
 static inline void
 l3fwd_simple_forward(struct rte_mbuf_t m, uint8_t port_id, 
     lcore_conf_t qconf) __attribute__((unused));
+
+/* init the lcore_params */
+static int
+init_lcore_params(int nb_port, int nb_queu, int nb_cpus);
+
+/* init lcore rx queues, lcore_conf(_array) */
+static int
+init_lcore_rx_queue(void);
+
+/* init mem */
+static int
+init_mem(unsigned nb_mbuf);
+
+/* main_loop */
+static int
+main_loop(__attribute__((unused)) void *dummy);
 
 #endif
