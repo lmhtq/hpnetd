@@ -424,38 +424,6 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
     }
 }
 
-/* main_loop */
-static int
-main_loop(__attribute__((unused)) void *dummy)
-{
-    rte_mbuf_t   pkts_burst[MAX_PKT_BURST];
-    unsigned     lcore_id;
-    uint64_t     pre_tsc, cur_tsc, diff_tsc;
-    int          i, j, nb_rx;
-    uint8_t      port_id, queue_id;
-    lcore_conf_t qconf;
-
-    const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) /
-        US_PER_S * BURST_TX_DRAIN_US;
-
-#ifdef ((LOOKUP_METHOD == LOOKUP_LPM) && (ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
-    int32_t   k;
-    uint16_t  dlp;
-    uint16_t  *lp;
-    uint16_t  dst_port[MAX_PKT_BURST];
-    __m128i   dip[MAX_PKT_BURST / FWDSTEP];
-    uint32_t  flag[MAX_PKT_BURST / FWDSTEP];
-    uint16_t  pnum[MAX_PKT_BURST + 1];
-#endif /* LOOKUP_METHOD and ENABLE_MULTI_BUFFER_OPTIMIZE */
-
-    pre_tsc = 0;
-
-    lcore_id = rte_lcore_id();
-    qconf = &lconf_conf[lcore_id];
-
-}
-
-
 /* config dpdk */
 static int 
 config_dpdk()
@@ -669,6 +637,233 @@ init_dpdk()
         if (rte_eal_wait_lcore(lcore_id) < 0 )
             return -1;
     }
-    
+    0
     return 0;
+}
+
+
+/* main_loop */
+static int
+main_loop(__attribute__((unused)) void *dummy)
+{
+    rte_mbuf_t   pkts_burst[MAX_PKT_BURST];
+    unsigned     lcore_id;
+    uint64_t     pre_tsc, cur_tsc, diff_tsc;
+    int          i, j, nb_rx;
+    uint8_t      port_id, queue_id;
+    lcore_conf_t qconf;
+
+    const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) /
+        US_PER_S * BURST_TX_DRAIN_US;
+
+#ifdef ((LOOKUP_METHOD == LOOKUP_LPM) && (ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
+    int32_t   k;
+    uint16_t  dlp;
+    uint16_t  *lp;
+    uint16_t  dst_port[MAX_PKT_BURST];
+    __m128i   dip[MAX_PKT_BURST / FWDSTEP];
+    uint32_t  flag[MAX_PKT_BURST / FWDSTEP];
+    uint16_t  pnum[MAX_PKT_BURST + 1];
+#endif /* LOOKUP_METHOD and ENABLE_MULTI_BUFFER_OPTIMIZE */
+
+    pre_tsc = 0;
+
+    lcore_id = rte_lcore_id();
+    qconf = &lconf_conf[lcore_id];
+
+    if (qconf->n_rx_queue == 0) {
+#ifdef DEBUG
+        printf("lcore %u has nothing to do\n", lcore_id);
+#endif
+        return 0;
+    }
+
+#ifdef DEBUG
+    printf("Entering main loop on lcore %u\n", lcore_id);
+#endif
+
+    for (i = 0; i < qconf->n_rx_queue; i++) {
+        port_id = qconf->rx_queue_list[i].port_id;
+        queue_id = qconf->rx_queue_list[i].queue_id;
+#ifdef DEBUG
+        printf("-- lcore_id=%u port_id=%hhu rx_queue_id=%hhu\n", 
+            lcore_id, port_id, queue_id);
+#endif
+    }
+
+    while(1) {
+        /* get the time */
+        cur_tsc = rte_rdtsc();
+
+        /* TX burst queue drain */
+        diff_tsc = cur_tsc - pre_tsc;
+        if (unlikely(diff_tsc > drain_tsc)) {
+            /* TODO: optimized it by using queueid */
+            for (port_id = 0; port_id < RTE_MAX_ETHPORTS; port_id++) {
+                if (qconf->tx_mbufs[port_id].len == 0) {
+                    continue;
+                }
+
+                send_burst(qconf, qconf->tx_mbufs[port_id].len, port_id);
+                qconf->tx_mbufs[port_id].len = 0;
+            }
+            
+            pre_tsc = cur_tsc;
+        }
+
+
+        /* Read pkts from RX queue */
+        for (i = 0; i < qconf->n_rx_queue; i++) {
+            port_id = qconf->rx_queue_list[i].port_id;
+            queue_id = qconf->rx_queue_list[i].queue_id;
+            nb_rx = rte_eth_rx_burst(port_id, queue_id, pkts_burst, 
+                MAX_PKT_BURST);
+            if (nb_rx == 0) {
+                continue;
+            }
+#if (ENABLE_MULTI_BUFFER_OPTIMIZE == 1)
+#if (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
+            {
+                /* send nb_rx - nb_rx%4 pkts in groups of 4 */
+                int32_t n = RTE_ALIGN_FLOOR(nb_rx, 4);
+                for (j = 0; j < n; j++) {
+                    uint32_t ol_flags = pkts_burst[j]->ol_flags
+                        & pkts_burst[j + 1]->ol_flags
+                        & pkts_burst[j + 2]->ol_flags
+                        & pkts_burst[j + 3]->ol_flags;
+                    if (ol_flags & PKT_RX_IPV4_HDR) {
+                        simple_ipv4_fwd_4pkts(&pkts_burst[j], 
+                            port_id, qconf);
+                    } else {
+                        l3fwd_simple_forward(pkts_burst[j], 
+                            port_id, qconf);
+                        l3fwd_simple_forward(pkts_burst[j+1], 
+                            port_id, qconf);
+                        l3fwd_simple_forward(pkts_burst[j+2], 
+                            port_id, qconf);
+                        l3fwd_simple_forward(pkts_burst[j+3], 
+                            port_id, qconf);
+                    }
+                }
+                for (; j < nb_rx; j++) {
+                    l3fwd_simple_forward(pkts_burst[j], 
+                        port_id, qconf);
+                }
+    
+            }
+            
+#elif (LOOKUP_METHOD == LOOKUP_LPM)
+            {
+                k = RTE_ALIGN_FLOOR(nb_rx, FWDSTEP);
+                for (j = 0; j != k; j += FWDSTEP) {
+                    processx4_step1(&pkts_burst[j], 
+                        &dip[j / FWDSTEP],
+                        &flag[j / FWDSTEP]);
+                }
+
+                k = RTE_ALIGN_FLOOR(nb_rx, FWDSTEP);
+                for (j = 0; j != k; j += FWDSTEP) {
+                    processx4_step2(qconf, dip[j / FWDSTEP], 
+                        flag[j / FWDSTEP], port_id, 
+                        &pkts_burst[j], &dst_port[j]);
+                }
+
+                /* finish pkt processing and group consecutive
+                 * pkts with same dst port */
+                k = RTE_ALIGN_FLOOR(nb_rx, FWDSTEP);
+                if (k != 0) {
+                    __m128i dp1, dp2;
+
+                    lp = pnum;
+                    lp[0] = 1;
+
+                    processx4_step3(pkts_burst, dst_port);
+                    /* dp1:<d[0], d[1], d[2], d[3], ...> */
+                    dp1 = _mm_loadu_si128((__m128i*)dst_port);
+
+                    for (j = FWDSTEP; j != k; j += FWDSTEP) {
+                        processx4_step3(&pkts_burst[j], &dst_port[j]);
+                        /* dp2:<d[j-3], d[j-2], d[j-1], d[j], ...> */
+                        dp2 = _mm_loadu_si128((__m128i*)
+                            &dst_port[j - FWDSTEP + 1]);
+                        lp = port_groupx4(&pnum[j - FWDSTEP], 
+                            lp, dp1, dp2);
+
+                        /* dp1:<d[j], d[j+1], d[j+2], d[j+3], ...> */
+                        dp1 = _mm_srli_si128(dp2, (FWDSTEP-1) * 
+                            sizeof(dst_port[0]));
+                    }
+
+                    /* dp2:<d[j-3], d[j-2], d[j-1], d[j], ...> */
+                    dp2 = _mm_shufflelo_epi16(dp1, 0xf9);
+                    lp = port_groupx4(&pnum[j - FWDSTEP], 
+                        lp, dp1, dp2);
+
+                    /* remove values added by the last repeated dst port */
+                    lp[0]--;
+                    dlp = dst_port[j - 1];
+                } else {
+                    /* set dlp and lp to the never used values */
+                    dlp = BAD_PORT - 1;
+                    lp = pnum + MAX_PKT_BURST;
+                }
+
+                /* process up to last 3 pkts one by one */
+                switch (nb_rx % FWDSTEP) {
+                    case 3:
+                        process_packet(qconf, pkts_burst[j], 
+                            dst_port + j, port_id);
+                        GROUP_PORT_STEP(dlp, dst_port, lp, pnum, j);
+                        j++;
+                    case 2:
+                        process_packet(qconf, pkts_burst[j], 
+                            dst_port + j, port_id);
+                        GROUP_PORT_STEP(dlp, dst_port, lp, pnum, j);
+                        j++;
+                    case 1:
+                        process_packet(qconf, pkts_burst[j], 
+                            dst_port + j, port_id);
+                        GROUP_PORT_STEP(dlp, dst_port, lp, pnum, j);
+                        j++;
+                }
+
+                /* sned pkts out, through dst port.
+                 * consecutive pkts with same dst port have been grouped
+                 * free them when dst port is BAD_POIR */
+                for (j = 0; j < nb_rx; j += k) {
+                    int32_t  m;
+                    uint16_t pn;
+
+                    pn = dst_port[j];
+                    k = pnum[j];
+                    if (likely(pn != BAD_POIR)) {
+                        send_packetsx4(qconf, pn, pkts_burst + j, k);
+                    } else {
+                        for (m = j; m != j +k ; m++) {
+                            rte_pktmbuf_free(pkts_burst[m]);
+                        }
+                    }
+                }
+            }
+#endif /* LOOKUP_METHOD */
+#else /* ENABLE_MULTI_BUFFER_OPTIMIZE == 0 */
+            /* prefetch first pkts */
+            for (j = 0; j < PREFETCH_OFFSET && j < nb_rx; j++) {
+                rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[j], void*));
+            }
+
+            /* prefetch remaining pkts */
+            for (j = 0; j < (nb_rx - PREFETCH_OFFSET); j++) {
+                rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[
+                    j + PREFETCH_OFFSET], void*));
+            }
+
+#endif /* ENABLE_MULTI_BUFFER_OPTIMIZE */
+
+
+
+        }
+
+    }
+
 }

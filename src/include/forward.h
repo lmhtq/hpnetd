@@ -293,11 +293,6 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask);
 static void
 print_ethaddr(const char *name. const struct ether_addr *eth_addr);
 
-/* main_loop */
-static int
-main_loop(__attribute__((unused)) void *dummy);
-
-
 /* config dpdk */
 static int 
 config_dpdk();
@@ -306,4 +301,8 @@ config_dpdk();
 static int
 init_dpdk();
 
-#endif
+/* main_loop */
+static int
+main_loop(__attribute__((unused)) void *dummy);
+
+#endif /* __FORWARD_H_ */
