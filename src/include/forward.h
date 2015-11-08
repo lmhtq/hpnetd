@@ -123,7 +123,7 @@
 #define RTE_TEST_RX_DESC_DEFAULT 128
 #define RTE_TEST_TX_DESC_DEFAULT 512
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t bc_txd = RTE_TEST_TX_DESC_DEFAULT;
+static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
 /* nic mac of ports */
 static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -181,7 +181,7 @@ static struct lcore_params lcore_params_array[MAX_LCORE_PARAMS]
 static struct lcore_params * lcore_params = lcore_params_array;
 
 /* number of lcore_params */
-static uint16_t nb_lcore_params;
+static uint16_t nb_lcore_params = 0;
 
 /* config of nic port */
 static struct rte_eth_conf port_conf = {
@@ -260,6 +260,10 @@ static inline void
 l3fwd_simple_forward(struct rte_mbuf_t m, uint8_t port_id, 
     lcore_conf_t qconf) __attribute__((unused));
 
+/* get the number of rx queues on specific port */
+static uint8_t 
+get_port_n_rx_queues(const uint8_t port_id);
+
 /* init the lcore_params */
 static int
 init_lcore_params(int nb_port, int nb_queu, int nb_cpus);
@@ -272,8 +276,34 @@ init_lcore_rx_queue(void);
 static int
 init_mem(unsigned nb_mbuf);
 
+/* check lcore params */
+static int
+check_lcore_params(void);
+
+/* check port config */
+static int 
+check_port_config(const unsigned nb_port);
+
+/* check the link status of all ports in up to 9s, 
+ *and print them finally */
+static void
+check_all_ports_link_status(uint8_t port_num, uint32_t port_mask);
+
+/* print mac address */
+static void
+print_ethaddr(const char *name. const struct ether_addr *eth_addr);
+
 /* main_loop */
 static int
 main_loop(__attribute__((unused)) void *dummy);
+
+
+/* config dpdk */
+static int 
+config_dpdk();
+
+/* init_dpdk */
+static int
+init_dpdk();
 
 #endif
