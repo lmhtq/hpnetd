@@ -140,16 +140,16 @@ simple_ipv4_fwd_4pkts(struct rte_mbuf_t m[4], uint8_t port_id,
         port_id : ipv4_l3fwd_out_if[ret[3]]);
 
     if (dst_port[0] >= RTE_MAX_ETHPORTS || 
-        (enabled_port_mask & 1 << dst_port[0]) == 0)
+        (enabled_port_mask & (1 << dst_port[0])) == 0)
         dst_port[0] = port_id;
     if (dst_port[1] >= RTE_MAX_ETHPORTS || 
-        (enabled_port_mask & 1 << dst_port[1]) == 0)
+        (enabled_port_mask & (1 << dst_port[1])) == 0)
         dst_port[1] = port_id;
     if (dst_port[2] >= RTE_MAX_ETHPORTS || 
-        (enabled_port_mask & 1 << dst_port[2]) == 0)
+        (enabled_port_mask & (1 << dst_port[2])) == 0)
         dst_port[2] = port_id;
     if (dst_port[3] >= RTE_MAX_ETHPORTS || 
-        (enabled_port_mask & 1 << dst_port[3]) == 0)
+        (enabled_port_mask & (1 << dst_port[3])) == 0)
         dst_port[3] = port_id;
 
     /* 02:00:00:00:00:00:xx */
@@ -220,7 +220,7 @@ l3fwd_simple_forward(rte_mbuf_t m, uint8_t port_id, lcore_conf_t qconf)
     dst_port = get_ipv4_dst_port(ipv4_hdr, port_id, 
         qconf->ipv4_lookup_struct);
     if (dst_port > RTE_MAX_ETHPORTS || 
-        (enabled_port_mask & 1 << dst_port) == 0)
+        (enabled_port_mask & (1 << dst_port)) == 0)
         dst_port = port_id;
 
     /* 02:00:00:00:00:00:xx */

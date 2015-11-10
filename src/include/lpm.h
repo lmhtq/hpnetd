@@ -57,7 +57,7 @@ struct ipv4_l3fwd_route {
 
 /* maximum number of l3fwd_route table */
 #define IPV4_L3FWD_NUM_ROUTES 1024
-static ipv4_l3fwd_num_routes = 0;
+static uint16_t ipv4_l3fwd_num_routes = 0;
 /* route table */
 static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
 
@@ -127,6 +127,10 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
     __m128i dp1, __m128i dp2);
 
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
+
+/* init ipv4_l3fwd_route_array */
+static void
+init_ipv4_l3fwd_route_array();
 
 /* setup LPM */
 static void

@@ -96,7 +96,7 @@ struct ipv4_l3fwd_route
 
 /* maximum number of l3fwd_route table */
 #define IPV4_L3FWD_NUM_ROUTES 1024
-static ipv4_l3fwd_num_routes = 0;
+static uint16_t ipv4_l3fwd_num_routes = 0;
 /* route table */
 static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
 

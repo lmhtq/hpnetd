@@ -299,6 +299,19 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
 
 
+/* init ipv4_l3fwd_route_array */
+static void
+init_ipv4_l3fwd_route_array()
+{
+    int i = 0;
+    for (; i < m_config.num_of_routes; i++) {
+        ipv4_l3fwd_route_array[i].ip = m_config.routes[i].ip;
+        ipv4_l3fwd_route_array[i].depth = m_config.routes[i].depth;
+        ipv4_l3fwd_route_array[i].if_out = (uint8_t)m_config.routes[i].ifindex;
+        ipv4_l3fwd_num_routes++;
+    }
+}
+
 /* setup LPM */
 static void
 setup_lpm(int socket_id)
@@ -320,7 +333,7 @@ setup_lpm(int socket_id)
     /* populate the LPM table */
     for (i = 0; i < IPV4_L3FWD_LPM_MAX_RULES; i++) {
         /* skip unused ports */
-        if ((1 << ipv4_l3fwd_route_array[i].if_out & 
+        if ( ( (1 << ipv4_l3fwd_route_array[i].if_out) & 
             enabled_port_mask) == 0)
             continue;
 

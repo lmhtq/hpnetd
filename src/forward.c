@@ -10,6 +10,7 @@
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include "forward.h"
+#include "config.h"
 
 /* functions implements */
 
@@ -175,7 +176,7 @@ is_valid_ipv4_pkt(struct ipv4_hdr *pkt, uint32_t link_len)
 
 /* init the lcore_params */
 static int
-init_lcore_params(int nb_port, int nb_queue, int nb_cpu)
+init_lcore_params(int nb_port, int nb_queue, int nb_cpus);
 {
     int i, j, k;
     nb_lcore_params = 0;
@@ -376,7 +377,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
         all_ports_up = 1;
         for (port_id = 0; port_id < port_num; port_id++) {
             /* skip unused port */
-            if ( (port_mask & (1 << port_id) == 0 ) {
+            if ( (port_mask & (1 << port_id)) == 0 ) {
                 continue;
             }
 
@@ -428,7 +429,46 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 static int 
 config_dpdk()
 {
-    /* TODO */
+    unsigned int i;
+    /* set enable_Port_mask */
+    enabled_port_mask = 0;
+    for (i = 0; i < m_config.num_of_nics_enabled; i++) {
+        enabled_port_mask |= (1 << i);
+    }
+
+    /* set promiscuous_on */
+    promiscuous_on = m_config.promiscuous_on;
+
+    /* set numa_on */
+    numa_on = m_config.numa_on;
+
+    /* TODO: 
+     * jumbo_frame
+     * max_pkt_len */
+    
+    /* init the lcore_params */
+    init_lcore_params(num_of_nics_enabled, 
+        m_config.num_rx_queue_per_lcore, 
+        m_config.num_cores);
+
+    /* set rss key: use toepliz */
+    static const uint8_t toepliz_key[40] = {
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
+    };
+
+    static const uint8_t mtcp_key[40] = {
+        0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+        0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+        0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+        0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+        0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05
+    };
+    port_conf.rx_adv_conf.rss_conf.rss_key = (uint8_t *)&key;
+    port_conf.rx_adv_conf.rss_conf.rss_key_len = sizeof(key);
 }
 
 /* init_dpdk */
@@ -437,7 +477,6 @@ init_dpdk()
 {
     lcore_conf_t            qconf;
     struct rte_eth_dev_info dev_info;
-    struct rte_eth_txconf   *txconf;
     int                     ret;
     unsigned                nb_ports;
     uint16_t                queue_id;
@@ -497,7 +536,7 @@ init_dpdk()
         fflush(stdout);
 
         nb_rx_queue = get_port_n_rx_queues(port_id);
-        n_tx_queue  = nb_lcores;
+        n_tx_queue  = m_config.num_tx_queue;
         if (n_tx_queue > MAX_TX_QUEUE_PER_PORT) {
             n_tx_queue = MAX_TX_QUEUE_PER_PORT;
         }

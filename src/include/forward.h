@@ -136,7 +136,7 @@ static __m128i val_eth[RTE_MAX_ETHPORTS];
 static uint32_t enabled_port_mask = 0;
 
 /**< port set in promiscuous mode off by default */
-static int promiscuous = 0;
+static int promiscuous_on = 0;
 
 /**< NUMA is enabled by default  */
 static int numa_on = 1;
@@ -206,13 +206,35 @@ static struct rte_eth_conf port_conf = {
     .rx_adv_conf = {
         .rss_conf = {
             .rss_key = NULL,
-            .rss_hf = ETH_RSS_IP,
+            .rss_hf = ETH_RSS_TCP,
         }
     },
     .txmode = {
         .mp_mode = ETH_MQ_TX_NONE,
     }
 };
+
+/* rx_conf */
+static struct rte_eth_rxconf rx_conf {
+    .rx_thresh = {
+        .pthresh = 8,  /* RX prefetch threshold reg */
+        .hthresh = 8,  /* RX host threshold reg */
+        .wthresh = 4,  /* RX write-back threshold reg */
+    },
+    rx_free_thresh = 32,
+} 
+
+/* tx_conf */
+static struct rte_eth_txconf tx_conf {
+    tx_threshold = {
+        .pthresh = 36,  /* TX prefetch threshold reg */
+        .hthresh = 0,   /* TX host threshold reg */
+        .wthresh = 0,   /* TX write-back threshold reg */
+    },
+    tx_free_thresh = 0, /* PMD default */
+    tx_rs_thresh   = 0, /* PMD default */
+    txq_flags      = 0
+}
 
 /* pktmbuf pool */
 typedef struct rte_mempool *rte_mempool_t;
@@ -266,7 +288,7 @@ get_port_n_rx_queues(const uint8_t port_id);
 
 /* init the lcore_params */
 static int
-init_lcore_params(int nb_port, int nb_queu, int nb_cpus);
+init_lcore_params(int nb_port, int nb_queue, int nb_cpus);
 
 /* init lcore rx queues, lcore_conf(_array) */
 static int
