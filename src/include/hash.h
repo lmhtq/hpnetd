@@ -2,6 +2,7 @@
 #define __HASH_H_
 
 #include "forward.h"
+#include "memstruct.h"
 #if (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
 
 #include <stdio.h>
@@ -146,11 +147,6 @@ get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id,
 static inline void
 simple_ipv4_fwd_4pkts(struct rte_mbuf_t m[4], uint8_t port_id,
     lcore_conf_t qconf);
-
-/* some typedef */
-typedef struct ipv4_hdr * ipv4_hdr_t;
-typedef struct ether_hdr * ether_hdr_t;
-typedef unsigned char uchar;
 
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
 

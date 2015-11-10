@@ -71,7 +71,7 @@ struct config_variables
     int num_of_nics;
     nic_info_t nics;
     int num_of_nics_enabled;
-    char *nics_enabled[MAX_NICS];
+    char *nics_enabled[MAX_NICS][128];
 
     /* queues */
     int num_rx_queue;

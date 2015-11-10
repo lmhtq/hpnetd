@@ -1,6 +1,7 @@
 #ifndef __LPM_H_
 #define __LPM_H_
 
+#include "memstruct.h"
 #include "forward.h"
 #if (LOOKUP_METHOD == LOOKUP_LPM)
 
@@ -48,23 +49,6 @@
 #include <rte_pci.h>
 #include <rte_random.h>
 
-/* struct of ipv4_l3fwd_route */
-struct ipv4_l3fwd_route {
-    uint32_t ip;
-    uint8_t depth;
-    uint8_t if_out;
-};
-
-/* maximum number of l3fwd_route table */
-#define IPV4_L3FWD_NUM_ROUTES 1024
-static uint16_t ipv4_l3fwd_num_routes = 0;
-/* route table */
-static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
-
-/* maximum number of rules */
-#define IPV4_L3FWD_LPM_MAX_RULES 1024
-typedef struct rte_lpm *lookup_struct_t;
-static lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
 
 /* get ipv4 dst port */
 static inline uint8_t
@@ -72,14 +56,14 @@ get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id,
     lookup_struct_t ipv4_l3fwd_lookup_struct);
 
 /* for enable multiple buffer optimize */
-#ifdef ENABLE_MULTI_BUFFER_OPTIMIZE == 1
+#if (ENABLE_MULTI_BUFFER_OPTIMIZE == 1)
 static inline __attribute__((always_inline)) uint16_t
 get_dst_port(const lcore_conf_t qconf, rte_mbuf_t pkt, 
     uint32_t dst_ipv4, uint8_t port_id);
 
 static inline void
 process_packet(lcore_conf_t qconf, rte_mbuf_t pkt,
-    uint16_t dst_port, uint8_t port_id);
+    uint16_t *dst_port, uint8_t port_id);
 
 /* read ol_flags and dst IPV4 address from 4 mubfs */
 static inline void
@@ -109,11 +93,11 @@ processx4_step3(rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP]);
 #define GROUP_PORT_STEP(dlp, dcp, lp, pn, idx) do { \
     if (likely((dlp) == (dcp)[(idx)])) {            \
         (lp)[0]++;                                  \
-    } else if {                                     \
+    } else {                                        \
         (dlp) = (dcp)[(idx)];                       \
         (lp) = (pn) + (idx);                        \
         (lp)[0] = 1;                                \
-    }
+    }												\
 } while(0)
 
 /* Group consecutive packets with the same dest port in burst of 4.

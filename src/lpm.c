@@ -1,4 +1,6 @@
 #include "lpm.h"
+#include "forward.h"
+#include "config.h"
 
 #if (LOOKUP_METHOD == LOOKUP_LPM)
 
@@ -33,7 +35,7 @@ get_dst_port(const lcore_conf_t qconf, rte_mbuf_t pkt,
 
 static inline void
 process_packet(lcore_conf_t qconf, rte_mbuf_t pkt,
-    uint16_t dst_port, uint8_t port_id)
+    uint16_t *dst_port, uint8_t port_id)
 {
     ether_hdr_t eth_hdr;
     ipv4_hdr_t  ipv4_hdr;
@@ -42,7 +44,7 @@ process_packet(lcore_conf_t qconf, rte_mbuf_t pkt,
     __m128i     te, ve;
 
     eth_hdr = rte_pktmbuf_mtod(pkt, ether_hdr_t);
-    ipv4_hdr = (ipv4_hdr_t)(ether_hdr + 1);
+    ipv4_hdr = (ipv4_hdr_t)(eth_hdr + 1);
 
     dst_ipv4 = ipv4_hdr->dst_addr;
     dst_ipv4 = rte_be_to_cpu_32(dst_ipv4);
@@ -102,7 +104,7 @@ processx4_step2(const lcore_conf_t qconf, __m128i dip, uint32_t flag,
         0,1,2,3);
 
     /* Byte swap 4 IPV4 addresses */
-    dip = _mm_shuffle_epi(dip, bswap_mask);
+    dip = _mm_shuffle_epi8(dip, bswap_mask);
 
     /* if all 4 pkt are ipv4 */
     if (likely(flag != 0)) {
@@ -179,97 +181,97 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
             /* 0:a!=b,b!=c,c!=d,d!=e */
             .pnum = UINT64_C(0x0001000100010001),
             .idx  = 4,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 1:a==b,b!=c,c!=d,d!=e */
             .pnum = UINT64_C(0x0001000100010002),
             .idx  = 4,
-            .ipv  = 1,
+            .lpv  = 1,
         },
         {
             /* 2:a!=b,b==c,c!=d,d!=e */
             .pnum = UINT64_C(0x0001000100020001),
             .idx  = 4,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 3:a==b,b==c,c!=d,d!=e */
             .pnum = UINT64_C(0x0001000100020003),
             .idx  = 4,
-            .ipv  = 2,
+            .lpv  = 2,
         },
         {
             /* 4:a!=b,b!=c,c==d,d!=e */
             .pnum = UINT64_C(0x0001000200010001),
             .idx  = 4,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 5:a==b,b!=c,c==d,d!=e */
             .pnum = UINT64_C(0x0001000200010002),
             .idx  = 4,
-            .ipv  = 1,
+            .lpv  = 1,
         },
         {
             /* 6:a!=b,b==c,c==d,d!=e */
             .pnum = UINT64_C(0x0001000200030001),
             .idx  = 4,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 7:a==b,b==c,c==d,d!=e */
             .pnum = UINT64_C(0x0001000200030004),
             .idx  = 4,
-            .ipv  = 3,
+            .lpv  = 3,
         },
         {
             /* 8:a!=b,b!=c,c!=d,d==e */
             .pnum = UINT64_C(0x0002000100010001),
             .idx  = 3,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 9:a==b,b!=c,c!=d,d==e */
             .pnum = UINT64_C(0x0002000100010002),
             .idx  = 3,
-            .ipv  = 1,
+            .lpv  = 1,
         },
         {
             /* 0xa(10):a!=b,b==c,c!=d,d==e */
             .pnum = UINT64_C(0x0002000100020001),
             .idx  = 3,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 0xb(11):a==b,b==c,c!=d,d==e */
             .pnum = UINT64_C(0x0002000100020003),
             .idx  = 3,
-            .ipv  = 2,
+            .lpv  = 2,
         },
         {
             /* 0xc(12):a!=b,b!=c,c==d,d==e */
             .pnum = UINT64_C(0x0002000300010001),
             .idx  = 2,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 0xd(13):a==b,b!=c,c==d,d==e */
             .pnum = UINT64_C(0x0002000300010002),
             .idx  = 2,
-            .ipv  = 1,
+            .lpv  = 1,
         },
         {
             /* 0xe(14):a!=b,b==c,c==d,d==e */
             .pnum = UINT64_C(0x0002000300040001),
             .idx  = 1,
-            .ipv  = 0,
+            .lpv  = 0,
         },
         {
             /* 0xf(15):a==b,b==c,c==d,d==e */
             .pnum = UINT64_C(0x0002000300040005),
             .idx  = 0,
-            .ipv  = 4,
+            .lpv  = 4,
         },
     };
 
@@ -280,8 +282,8 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
 
     int32_t v;
     dp1 = _mm_cmpeq_epi16(dp1, dp2);
-    dp1 = _mm_unpacklo_epi16(dp1, dp2);
-    v = _mm_movemask_ps((__m128i)dp1);
+    dp1 = _mm_unpacklo_epi16(dp1, dp1);
+    v = _mm_movemask_ps((__m128)dp1);
 
     /* update last port number */
     lp[0] += gptbl[v].lpv;
@@ -306,7 +308,7 @@ init_ipv4_l3fwd_route_array()
     int i = 0;
     for (; i < m_config.num_of_routes; i++) {
         ipv4_l3fwd_route_array[i].ip = m_config.routes[i].ip;
-        ipv4_l3fwd_route_array[i].depth = m_config.routes[i].depth;
+        ipv4_l3fwd_route_array[i].depth = m_config.routes[i].prefix;
         ipv4_l3fwd_route_array[i].if_out = (uint8_t)m_config.routes[i].ifindex;
         ipv4_l3fwd_num_routes++;
     }

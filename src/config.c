@@ -23,8 +23,8 @@ int init_rte()
     m_config.max_num_buffers = 10000;
     m_config.recv_buf_size = 8192;
     m_config.send_buf_size = 8192;
-    m_config.num_rx_queue_per_lcore = 1;
-    m_config.num_tx_queue_per_port = 1;
+    m_config.num_rx_queue = 1;
+    m_config.num_tx_queue = 1;
 
     /* Later To Extended */
     /* use numa, (default: yes) */
@@ -95,8 +95,8 @@ int set_to_rte(char *rte_line)
     } else if (0 == strcmp("MEM_CHAN_NUM", key)) {
         m_config.num_memory_channels = atoi(value);
     } else if (0 == strcmp("PORT_ENABLED", key)) {
-        strncpy(m_config.nics_enabled[m_config.num_of_nics_enabled], 
-            value, sizeof(value));
+		sscanf(value , "%s", 
+			m_config.nics_enabled[m_config.num_of_nics_enabled]);
         m_config.num_of_nics_enabled++;
     } else if (0 == strcmp("RX_QUEUE", key)) {
         m_config.num_rx_queue = atoi(value);
@@ -165,18 +165,18 @@ int init_dpdk_rte()
         exit(-1);
      }
 
-     /* get nic ports that support dpdk */
-     num_of_devices = rte_eth_dev_count();
-	 printf("DPDK devices: %d\n", num_of_devices);
-     if (num_of_devices <= 0) {
-        rte_exit(EXIT_FAILURE, "No DPDK nic ports\n");
-        fprintf(stderr, 
-            "Error DPDK nic ports.\n");
-        exit(-1);
-     }
-     m_config.num_of_nics = num_of_devices;
-
-     return 0;
+	/* get nic ports that support dpdk */
+	num_of_devices = rte_eth_dev_count();
+	printf("DPDK devices: %d\n", num_of_devices);
+	if (num_of_devices <= 0) {
+		rte_exit(EXIT_FAILURE, "No DPDK nic ports\n");
+		fprintf(stderr, 
+			"Error DPDK nic ports.\n");
+		exit(-1);
+	}
+	m_config.num_of_nics = num_of_devices;
+    
+	return 0;
 }
 
 /* init nic list */
@@ -636,9 +636,6 @@ int add_to_route_table(char *route_line, int route_idx)
 inline int add_to_route_table_core(route_info_t route,
     char *dest_ip, char *prefix, char *dev_name)
 {
-    printf("ip:       %s\n", dest_ip);
-    printf("prefix:   %s\n", prefix);
-    printf("dev_name: %s\n", dev_name);
     uint32_t *ip_addr = &route->ip;
     int prefix_i, j;
     uint32_t mask = 0;

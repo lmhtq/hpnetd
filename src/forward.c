@@ -17,7 +17,7 @@
 
 /* send burst of pkts on an output interface */
 static inline int
-send_burst(struct lcore_conf_t qconf, uint16_t n, uint8_t port)
+send_burst(lcore_conf_t qconf, uint16_t n, uint8_t port)
 {
     rte_mbuf_t *m_table;
     int ret;
@@ -29,7 +29,7 @@ send_burst(struct lcore_conf_t qconf, uint16_t n, uint8_t port)
     ret = rte_eth_tx_burst(port, queue_id, m_table, n);
     if (unlikely(ret < n)) {
         do {
-            rte_pktmbuf_free(m_table[ret])
+            rte_pktmbuf_free(m_table[ret]);
         } while(++ret < n);
     }
 
@@ -43,7 +43,7 @@ send_single_packet(struct rte_mbuf *m, uint8_t port)
 {
     uint32_t lcore_id;
     uint16_t len;
-    lcore_conf_t *qconf;
+    lcore_conf_t qconf;
 
     lcore_id = rte_lcore_id();
 
@@ -63,7 +63,7 @@ send_single_packet(struct rte_mbuf *m, uint8_t port)
 
 /* send packetsx4 */
 static inline __attribute__((always_inline)) void
-send_packetsx4(struct lcore_conf_t qconf, uint8_t port,
+send_packetsx4(lcore_conf_t qconf, uint8_t port,
     rte_mbuf_t m[], uint32_t num)
 {
     uint32_t len, j, n;
@@ -176,17 +176,17 @@ is_valid_ipv4_pkt(struct ipv4_hdr *pkt, uint32_t link_len)
 
 /* init the lcore_params */
 static int
-init_lcore_params(int nb_port, int nb_queue, int nb_cpus);
+init_lcore_params(int nb_port, int nb_queue, int nb_cpus)
 {
     int i, j, k;
     nb_lcore_params = 0;
 
     for (i = 0; i < nb_port; ++i) {
         for (j = 0; j < nb_queue; ++j) {
-            for (k = 0; k < nb_cpu; k++) {
-                lcore_params[nb_lcore_params][0] = i;/* port_id  */
-                lcore_params[nb_lcore_params][1] = j;/* queue_id */
-                lcore_params[nb_lcore_params][2] = k;/* lcore_id */
+            for (k = 0; k < nb_cpus; k++) {
+                lcore_params[nb_lcore_params].port_id = i;/* port_id  */
+                lcore_params[nb_lcore_params].queue_id = j;/* queue_id */
+                lcore_params[nb_lcore_params].lcore_id = k;/* lcore_id */
                 nb_lcore_params++;
             }
         }
@@ -281,9 +281,9 @@ init_mem(unsigned nb_mbuf)
                 printf("Allocated mbuf pool on socket %d\n", socket_id);
             }
 
-#ifdef (LOOKUP_METHOD == LOOKUP_LPM)
+#if (LOOKUP_METHOD == LOOKUP_LPM)
             setup_lpm(socket_id);
-#elif
+#elif (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
             setup_hash(socket_id);
 #endif /* LOOKUP_METHOD for setup hash/lpm */
 
@@ -321,7 +321,7 @@ check_lcore_params(void)
         }
         
         socket_id = rte_lcore_to_socket_id(lcore);
-        if ( socket_id != 0 && numa_on == 0) ) {
+        if ( socket_id != 0 && numa_on == 0) {
             printf("Warning: lcore %hhu is on socket %d with numa off\n", 
                 lcore, socket_id);
         }
@@ -354,7 +354,7 @@ check_port_config(const unsigned nb_port)
 
 /* print mac address */
 static void
-print_ethaddr(const char *name. const struct ether_addr *eth_addr)
+print_ethaddr(const char *name, const struct ether_addr *eth_addr)
 {
     char buf[ETHER_ADDR_FMT_SIZE];
     ether_format_addr(buf, ETHER_ADDR_FMT_SIZE, eth_addr);
@@ -369,7 +369,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90  /* 9s (100ms * 90) in total */
     uint8_t port_id, count, all_ports_up, print_flag = 0;
-    static rte_eth_link link;
+    static struct rte_eth_link link;
 
     printf("\nChecking link status\n");
     fflush(stdout);
@@ -447,8 +447,8 @@ config_dpdk()
      * max_pkt_len */
     
     /* init the lcore_params */
-    init_lcore_params(num_of_nics_enabled, 
-        m_config.num_rx_queue_per_lcore, 
+    init_lcore_params(m_config.num_of_nics_enabled, 
+        m_config.num_rx_queue, 
         m_config.num_cores);
 
     /* set rss key: use toepliz */
@@ -467,8 +467,8 @@ config_dpdk()
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05
     };
-    port_conf.rx_adv_conf.rss_conf.rss_key = (uint8_t *)&key;
-    port_conf.rx_adv_conf.rss_conf.rss_key_len = sizeof(key);
+    port_conf.rx_adv_conf.rss_conf.rss_key = (uint8_t *)&toepliz_key;
+    port_conf.rx_adv_conf.rss_conf.rss_key_len = sizeof(toepliz_key);
 }
 
 /* init_dpdk */
@@ -481,7 +481,7 @@ init_dpdk()
     unsigned                nb_ports;
     uint16_t                queue_id;
     unsigned                lcore_id;
-    uint32_t                n_tx_queue;
+    uint32_t                nb_tx_queue;
     uint32_t                nb_lcores;
     uint8_t                 port_id;
     uint8_t                 nb_rx_queue;
@@ -504,7 +504,7 @@ init_dpdk()
     }
 
     if (check_lcore_params() < 0) {
-        rte_exit(EXIT_FAILURE, "check_lcore_params failed.\n")
+        rte_exit(EXIT_FAILURE, "check_lcore_params failed.\n");
     }
 
     ret = init_lcore_rx_queue();
@@ -536,19 +536,19 @@ init_dpdk()
         fflush(stdout);
 
         nb_rx_queue = get_port_n_rx_queues(port_id);
-        n_tx_queue  = m_config.num_tx_queue;
-        if (n_tx_queue > MAX_TX_QUEUE_PER_PORT) {
-            n_tx_queue = MAX_TX_QUEUE_PER_PORT;
+        nb_tx_queue  = m_config.num_tx_queue;
+        if (nb_tx_queue > MAX_TX_QUEUE_PER_PORT) {
+            nb_tx_queue = MAX_TX_QUEUE_PER_PORT;
         }
         ret = rte_eth_dev_configure(port_id, nb_rx_queue, 
-            (uint16_t)n_tx_queue, &port_conf);
+            (uint16_t)nb_tx_queue, &port_conf);
         if (ret < 0) {
             rte_exit(EXIT_FAILURE, "Cannot configure device:"
                 " err=%d, port=%d", ret, port_id);
         } 
 
         printf("Created queues: nb_rxq=%d, nb_txq=%u. ", 
-            nb_rx_queue, (unsigned)n_tx_queue);
+            nb_rx_queue, (unsigned)nb_tx_queue);
         rte_eth_macaddr_get(port_id, &ports_eth_addr[port_id]);
         print_ethaddr("Address:", &ports_eth_addr[port_id]);
         printf(", ");
@@ -573,7 +573,7 @@ init_dpdk()
             /* skip unused lcore */
             if (rte_lcore_is_enabled(lcore_id) == 0) {
                 printf("Skipping unused lcore %u.\n", lcore_id);
-                continue
+                continue;
             }
 
             if (numa_on) {
@@ -585,13 +585,11 @@ init_dpdk()
             printf("txq=%u,%d,%d\n", lcore_id, queue_id, socket_id);
             fflush(stdout);
 
-            rte_eth_dev_info_get(port_id, &dev_info);
-            txconf = &dev_info.default_txconf;
             if (port_conf.rxmode.jumbo_frame) {
-                txconf->txq_flags = 0;
+                tx_conf.txq_flags = 0;
             }
             ret = rte_eth_tx_queue_setup(port_id, queue_id, 
-                nb_txd, socket_id, txconf);
+                nb_txd, socket_id, &tx_conf);
             if (ret < 0) {
                 rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup: "
                     "err=%d, port=%u", ret, port_id);
@@ -635,7 +633,7 @@ init_dpdk()
                 nb_rxd, socket_id, NULL, pktmbuf_pool[socket_id]);
             if (ret < 0) {
                 rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup: "
-                    "err=%d, port=%d", ret, q.port_id);
+                    "err=%d, port=%d", ret, port_id);
             }
         }
     }
@@ -672,11 +670,11 @@ init_dpdk()
 
     /* launch per-locre init on each lcore */
     rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);
-    RTE_LCORE_ROREACH_SLAVE(lcore_id) {
+    RTE_LCORE_FOREACH_SLAVE(lcore_id) {
         if (rte_eal_wait_lcore(lcore_id) < 0 )
             return -1;
     }
-    0
+    
     return 0;
 }
 
@@ -695,7 +693,7 @@ main_loop(__attribute__((unused)) void *dummy)
     const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) /
         US_PER_S * BURST_TX_DRAIN_US;
 
-#ifdef ((LOOKUP_METHOD == LOOKUP_LPM) && (ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
+#if ((LOOKUP_METHOD == LOOKUP_LPM) && (ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
     int32_t   k;
     uint16_t  dlp;
     uint16_t  *lp;
@@ -708,7 +706,7 @@ main_loop(__attribute__((unused)) void *dummy)
     pre_tsc = 0;
 
     lcore_id = rte_lcore_id();
-    qconf = &lconf_conf[lcore_id];
+    qconf = &lcore_conf[lcore_id];
 
     if (qconf->n_rx_queue == 0) {
 #ifdef DEBUG
@@ -875,7 +873,7 @@ main_loop(__attribute__((unused)) void *dummy)
 
                     pn = dst_port[j];
                     k = pnum[j];
-                    if (likely(pn != BAD_POIR)) {
+                    if (likely(pn != BAD_PORT)) {
                         send_packetsx4(qconf, pn, pkts_burst + j, k);
                     } else {
                         for (m = j; m != j +k ; m++) {
