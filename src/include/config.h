@@ -70,6 +70,12 @@ struct config_variables
     /* NICs */
     int num_of_nics;
     nic_info_t nics;
+    int num_of_nics_enabled;
+    char *nics_enabled[MAX_NICS];
+
+    /* queues */
+    int num_rx_queue;
+    int num_tx_queue;
 
     /* ARP */
     int num_of_arps;
@@ -79,10 +85,21 @@ struct config_variables
     int num_of_routes;
     route_info_t routes;
 
+    /* Later To Extended */
+    /* use numa, (default: yes) */
+    int numa_on;
+    /* use jumbo frame, (default: no) */
+    int jumbo_frame;
+    /* max_pkt_len: (only useful when use jumbo,  64~9600) */
+    int max_pkt_len;
+    /* Promiscuous on (default: yes) */
+    int promiscuous_on;
+    /* hash_entry_num (default: 4) */
+    int hash_entry_num;
 };
 
 /* mmutcpd's basic config */
-config_variables_t m_config;
+static config_variables_t m_config;
 
 /* functions definition */
 

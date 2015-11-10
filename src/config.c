@@ -18,10 +18,25 @@ int init_rte()
 {
     m_config.num_cores = 1;
     m_config.num_memory_channels = 2;
+    m_config.num_of_nics_enabled = 0;
     m_config.max_concurrency = 10000;
     m_config.max_num_buffers = 10000;
     m_config.recv_buf_size = 8192;
     m_config.send_buf_size = 8192;
+    m_config.num_rx_queue_per_lcore = 1;
+    m_config.num_tx_queue_per_port = 1;
+
+    /* Later To Extended */
+    /* use numa, (default: yes) */
+    m_config.numa_on = 1;
+    /* use jumbo frame, (default: no) */
+    m_config.jumbo_frame = 0;
+    /* max_pkt_len: (only useful when use jumbo) */
+    m_config.max_pkt_len = 9600;
+    /* Promiscuous on (default: yes) */
+    m_config.promiscuous_on = 1;
+    /* hash_entry_num (default: 4) */
+    m_config.hash_entry_num = 4;
 }
 
 /* set rte of dpdk */
@@ -79,6 +94,14 @@ int set_to_rte(char *rte_line)
         m_config.num_cores = atoi(value);
     } else if (0 == strcmp("MEM_CHAN_NUM", key)) {
         m_config.num_memory_channels = atoi(value);
+    } else if (0 == strcmp("PORT_ENABLED", key)) {
+        strncpy(m_config.nics_enabled[m_config.num_of_nics_enabled], 
+            value, sizeof(value));
+        m_config.num_of_nics_enabled++;
+    } else if (0 == strcmp("RX_QUEUE", key)) {
+        m_config.num_rx_queue = atoi(value);
+    } else if (0 == strcmp("TX_QUEUE", key)) {
+        m_config.num_tx_queue = atoi(value);
     } else if (0 == strcmp("MAX_CONCURRENCY_NUM", key)) {
         m_config.max_concurrency = atoi(value);
     } else if (0 == strcmp("MAX_BUF_NUM", key)) {
@@ -93,8 +116,12 @@ int set_to_rte(char *rte_line)
 /* dump rte config */
 void dump_rte_config()
 {
+    int i;
     printf("CPU_NUM             =%d\n", m_config.num_cores);
     printf("MEM_CHAN_NUM        =%d\n", m_config.num_memory_channels);
+    printf("ENABLED_PORT_NUM    =%d\n", m_config.num_of_nics_enabled);
+    for (i = 0; i < m_config.num_of_nics_enabled; i++) 
+        printf("Port enabled: %s\n", m_config.nics_enabled[i]);
     printf("MAX_CONCURRENCY_NUM =%d\n", m_config.max_concurrency);
     printf("MAX_BUF_NUM         =%d\n", m_config.max_num_buffers);
     printf("RECV_BUF_SIZE       =%d\n", m_config.recv_buf_size);
