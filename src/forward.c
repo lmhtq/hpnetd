@@ -16,7 +16,7 @@
 
 
 /* send burst of pkts on an output interface */
-static inline int
+inline int
 send_burst(lcore_conf_t qconf, uint16_t n, uint8_t port)
 {
     rte_mbuf_t *m_table;
@@ -38,7 +38,7 @@ send_burst(lcore_conf_t qconf, uint16_t n, uint8_t port)
 
 
 /* enqueue a single pkt, add send burst if queue is filled */
-static inline int
+inline int
 send_single_packet(struct rte_mbuf *m, uint8_t port)
 {
     uint32_t lcore_id;
@@ -62,7 +62,7 @@ send_single_packet(struct rte_mbuf *m, uint8_t port)
 }
 
 /* send packetsx4 */
-static inline __attribute__((always_inline)) void
+inline __attribute__((always_inline)) void
 send_packetsx4(lcore_conf_t qconf, uint8_t port,
     rte_mbuf_t m[], uint32_t num)
 {
@@ -142,7 +142,7 @@ send_packetsx4(lcore_conf_t qconf, uint8_t port,
 
 #ifdef DO_RFC_1812_CHECKS
 /* check whether the pkt is valid */
-static inline int
+inline int
 is_valid_ipv4_pkt(struct ipv4_hdr *pkt, uint32_t link_len)
 {
     /* 1. the packet length must be large enough to 
@@ -175,7 +175,7 @@ is_valid_ipv4_pkt(struct ipv4_hdr *pkt, uint32_t link_len)
 
 
 /* init the lcore_params */
-static int
+int
 init_lcore_params(int nb_port, int nb_queue, int nb_cpus)
 {
     int i, j, k;
@@ -197,7 +197,7 @@ init_lcore_params(int nb_port, int nb_queue, int nb_cpus)
 
 
 /* get the number of rx queues on specific port */
-static uint8_t 
+uint8_t 
 get_port_n_rx_queues(const uint8_t port_id)
 {
     int      queue = -1;
@@ -213,7 +213,7 @@ get_port_n_rx_queues(const uint8_t port_id)
 }
 
 /* init lcore rx queues, lcore_conf(_array) */
-static int
+int
 init_lcore_rx_queue(void)
 {
     uint16_t i, nb_rx_queue;
@@ -241,7 +241,7 @@ init_lcore_rx_queue(void)
 }
 
 /* init mem */
-static int
+int
 init_mem(unsigned nb_mbuf)
 {
     lcore_conf_t qconf;
@@ -299,7 +299,7 @@ init_mem(unsigned nb_mbuf)
 
 
 /* check lcore params */
-static int
+int
 check_lcore_params(void)
 {
     uint8_t  queue, lcore;
@@ -331,7 +331,7 @@ check_lcore_params(void)
 }
 
 /* check port config */
-static int 
+int 
 check_port_config(const unsigned nb_port)
 {
     unsigned port_id;
@@ -353,7 +353,7 @@ check_port_config(const unsigned nb_port)
 
 
 /* print mac address */
-static void
+void
 print_ethaddr(const char *name, const struct ether_addr *eth_addr)
 {
     char buf[ETHER_ADDR_FMT_SIZE];
@@ -363,13 +363,13 @@ print_ethaddr(const char *name, const struct ether_addr *eth_addr)
 
 /* check the link status of all ports in up to 9s, 
  * and print them finally */
-static void
+void
 check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90  /* 9s (100ms * 90) in total */
     uint8_t port_id, count, all_ports_up, print_flag = 0;
-    static struct rte_eth_link link;
+    struct rte_eth_link link;
 
     printf("\nChecking link status\n");
     fflush(stdout);
@@ -426,7 +426,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 }
 
 /* config dpdk */
-static int 
+int 
 config_dpdk()
 {
     unsigned int i;
@@ -452,7 +452,7 @@ config_dpdk()
         m_config.num_cores);
 
     /* set rss key: use toepliz */
-    static const uint8_t toepliz_key[40] = {
+    const uint8_t toepliz_key[40] = {
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
@@ -460,7 +460,7 @@ config_dpdk()
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
     };
 
-    static const uint8_t mtcp_key[40] = {
+    const uint8_t mtcp_key[40] = {
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
@@ -472,7 +472,7 @@ config_dpdk()
 }
 
 /* init_dpdk */
-static int
+int
 init_dpdk()
 {
     lcore_conf_t            qconf;
@@ -680,7 +680,7 @@ init_dpdk()
 
 
 /* main_loop */
-static int
+int
 main_loop(__attribute__((unused)) void *dummy)
 {
     rte_mbuf_t   pkts_burst[MAX_PKT_BURST];
