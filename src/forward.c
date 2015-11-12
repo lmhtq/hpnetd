@@ -9,11 +9,93 @@
 #include <sys/socket.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
+
 #include "forward.h"
 #include "config.h"
 
-/* functions implements */
+/* set lookup method */
+#if (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
+#include <rte_hash.h>
+#include "hash.h"
+#elif (LOOKUP_METHOD == LOOKUP_LPM)
+#include <rte_lpm.h>
+#include <lpm.h>
+#else
+#error("LOOKUP_METHOD set to wrong value")
+#endif
 
+#if (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
+#include "hash.h"
+#elif (LOOKUP_METHOD == LOOKUP_LPM)
+#include "lpm.h"
+#endif
+
+/* definations of some extern variables */
+struct lcore_conf lcore_conf_array[RTE_MAX_LCORE];
+lcore_conf_t lcore_conf = lcore_conf_array;
+uint16_t nb_lcore_params = 0;
+struct lcore_params lcore_params_array[];
+struct lcore_params * lcore_params;
+int numa_on = 1;
+int promiscuous_on = 1;
+int32_t enabled_port_mask = 0;
+uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
+uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+uint16_t ipv4_l3fwd_num_routes = 0;
+
+
+/* config of nic port */
+struct rte_eth_conf port_conf = {
+    .rxmode = {
+        /* multi-queue pkt distribution mode to be used. eg RSS */
+        .mq_mode = ETH_MQ_RX_RSS, 
+        /* only used if jumbo_frame is enabled */
+        .max_rx_pkt_len = ETHER_MAX_LEN,
+        /* hdr buf size (header_split enabled) */
+        .split_hdr_size = 0,
+        /**< header split disabled */
+        .header_split = 0,
+        /**< IP checksum offload enabled */
+        .hw_ip_checksum = 1,
+        /**< VLAN filtering disabled */
+        .hw_vlan_filter = 0,
+        /**< jumbo frame support disabled */
+        .jumbo_frame = 0,
+        /**< CRC stripped by hardware */
+        .hw_strip_crc = 0,
+    },
+    .rx_adv_conf = {
+        .rss_conf = {
+            .rss_key = NULL,
+            .rss_hf = ETH_RSS_TCP,
+        }
+    },
+    .txmode = {
+        .mq_mode = ETH_MQ_TX_NONE,
+    }
+};
+
+/* rx_conf */
+struct rte_eth_rxconf rx_conf = {
+    .rx_thresh = {
+        .pthresh = 8,  /* RX prefetch threshold reg */
+        .hthresh = 8,  /* RX host threshold reg */
+        .wthresh = 4,  /* RX write-back threshold reg */
+    },
+    .rx_free_thresh = 32,
+}; 
+
+/* tx_conf */
+struct rte_eth_txconf tx_conf = {
+    .tx_thresh = {
+        .pthresh = 36,  /* TX prefetch threshold reg */
+        .hthresh = 0,   /* TX host threshold reg */
+        .wthresh = 0,   /* TX write-back threshold reg */
+    },
+    .tx_free_thresh = 0, /* PMD default */
+    .tx_rs_thresh   = 0, /* PMD default */
+    .txq_flags      = 0.
+};
 
 /* send burst of pkts on an output interface */
 inline int
@@ -369,7 +451,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90  /* 9s (100ms * 90) in total */
     uint8_t port_id, count, all_ports_up, print_flag = 0;
-    struct rte_eth_link link;
+    static struct rte_eth_link link;
 
     printf("\nChecking link status\n");
     fflush(stdout);
@@ -452,7 +534,7 @@ config_dpdk()
         m_config.num_cores);
 
     /* set rss key: use toepliz */
-    const uint8_t toepliz_key[40] = {
+    static const uint8_t toepliz_key[40] = {
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
@@ -460,7 +542,7 @@ config_dpdk()
         0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
     };
 
-    const uint8_t mtcp_key[40] = {
+    static const uint8_t mtcp_key[40] = {
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
         0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
@@ -470,214 +552,6 @@ config_dpdk()
     port_conf.rx_adv_conf.rss_conf.rss_key = (uint8_t *)&toepliz_key;
     port_conf.rx_adv_conf.rss_conf.rss_key_len = sizeof(toepliz_key);
 }
-
-/* init_dpdk */
-int
-init_dpdk()
-{
-    lcore_conf_t            qconf;
-    struct rte_eth_dev_info dev_info;
-    int                     ret;
-    unsigned                nb_ports;
-    uint16_t                queue_id;
-    unsigned                lcore_id;
-    uint32_t                nb_tx_queue;
-    uint32_t                nb_lcores;
-    uint8_t                 port_id;
-    uint8_t                 nb_rx_queue;
-    uint8_t                 queue;
-    uint8_t                 socket_id;
-
-    /* init EAL, done in config module */
-
-    /* config such features:
-     * -p              : enabled_port_mask
-     * -P              : promiscuous_on
-     * --config        : lcore_params, and nb_lcore_params
-     * --no_numa       : numa_on = 1
-     * --enable-jumbo  : port_conf.rxmode.jumbo_frame = 1
-     * --max-pkt-len   : port_conf.rxmode.max_rx_pkt_len = val 
-     * --hash-entry-num: hash_entry_num = val*/
-    ret = config_dpdk();
-    if (ret < 0) {
-        rte_exit(EXIT_FAILURE, "Invalid config.");
-    }
-
-    if (check_lcore_params() < 0) {
-        rte_exit(EXIT_FAILURE, "check_lcore_params failed.\n");
-    }
-
-    ret = init_lcore_rx_queue();
-    if (ret < 0) {
-        rte_exit(EXIT_FAILURE, "init_lcore_params failed.\n");
-    }
-
-    nb_ports = rte_eth_dev_count();
-    if (nb_ports > RTE_MAX_ETHPORTS) {
-        nb_ports = RTE_MAX_ETHPORTS;
-    }
-
-    if (check_port_config(nb_ports) < 0) {
-        rte_exit(EXIT_FAILURE, "check_port_config failed.\n");
-    }
-
-    nb_lcores = rte_lcore_count();
-
-    /* init all ports */
-    for (port_id; port_id < nb_ports; port_id++) {
-        /* skip unused port */
-        if ((enabled_port_mask & (1 << port_id)) == 0) {
-            printf("Skipping unused port %d\n", port_id);
-            continue;
-        }
-
-        /* init port */
-        printf("Initializing port %d ...\n", port_id);
-        fflush(stdout);
-
-        nb_rx_queue = get_port_n_rx_queues(port_id);
-        nb_tx_queue  = m_config.num_tx_queue;
-        if (nb_tx_queue > MAX_TX_QUEUE_PER_PORT) {
-            nb_tx_queue = MAX_TX_QUEUE_PER_PORT;
-        }
-        ret = rte_eth_dev_configure(port_id, nb_rx_queue, 
-            (uint16_t)nb_tx_queue, &port_conf);
-        if (ret < 0) {
-            rte_exit(EXIT_FAILURE, "Cannot configure device:"
-                " err=%d, port=%d", ret, port_id);
-        } 
-
-        printf("Created queues: nb_rxq=%d, nb_txq=%u. ", 
-            nb_rx_queue, (unsigned)nb_tx_queue);
-        rte_eth_macaddr_get(port_id, &ports_eth_addr[port_id]);
-        print_ethaddr("Address:", &ports_eth_addr[port_id]);
-        printf(", ");
-
-
-        /* prepare dst and src MACs for each port. 
-         * TODO? why????? */
-        *(uint64_t *)(val_eth + port_id) = 
-            ETHER_LOCAL_ADMIN_ADDR + ((uint64_t)port_id << 40);
-        ether_addr_copy(&ports_eth_addr[port_id], 
-            (struct ether_addr *)(val_eth + port_id) + 1);
-
-        /* init memory */
-        ret = init_mem(NB_MBUF);
-        if (ret < 0) {
-            rte_exit(EXIT_FAILURE, "init_mem failed.\n");
-        }
-
-        /* init one TX queue per couple */
-        queue_id = 0;
-        for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
-            /* skip unused lcore */
-            if (rte_lcore_is_enabled(lcore_id) == 0) {
-                printf("Skipping unused lcore %u.\n", lcore_id);
-                continue;
-            }
-
-            if (numa_on) {
-                socket_id = (uint8_t)rte_lcore_to_socket_id(lcore_id);
-            } else {
-                socket_id = 0;
-            }
-
-            printf("txq=%u,%d,%d\n", lcore_id, queue_id, socket_id);
-            fflush(stdout);
-
-            if (port_conf.rxmode.jumbo_frame) {
-                tx_conf.txq_flags = 0;
-            }
-            ret = rte_eth_tx_queue_setup(port_id, queue_id, 
-                nb_txd, socket_id, &tx_conf);
-            if (ret < 0) {
-                rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup: "
-                    "err=%d, port=%u", ret, port_id);
-            }
-            qconf = &lcore_conf[lcore_id];
-            qconf->tx_queue_id[port_id] = queue_id;
-            queue_id++;
-
-        }
-
-        printf("\n");
-    }
-
-    /* Init RX queues */
-    for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
-        /* skip unused lcore */
-        if (rte_lcore_is_enabled(lcore_id) == 0) {
-            printf("Skipping unused lcore %u.\n", lcore_id);
-            continue;
-        }
-
-        qconf = &lcore_conf[lcore_id];
-        printf("Initializing rx queues on lcore %u ... \n", lcore_id);
-        fflush(stdout);
-
-        /* init RX queue */
-        for (queue = 0; queue < qconf->n_rx_queue; queue++) {
-            port_id = qconf->rx_queue_list[queue].port_id;
-            queue_id = qconf->rx_queue_list[queue].queue_id;
-
-            if (numa_on) {
-                socket_id = (uint8_t)rte_lcore_to_socket_id(lcore_id);
-            } else {
-                socket_id = 0;
-            }
-
-            printf("rxq=%d,%d,%d\n", port_id, queue_id, socket_id);
-            fflush(stdout);
-
-            ret = rte_eth_rx_queue_setup(port_id, queue_id, 
-                nb_rxd, socket_id, NULL, pktmbuf_pool[socket_id]);
-            if (ret < 0) {
-                rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup: "
-                    "err=%d, port=%d", ret, port_id);
-            }
-        }
-    }
-
-    printf("\n");
-
-    /* start ports */
-    for(port_id = 0; port_id < nb_ports; port_id++) {
-        /* skip unused port */
-        if ((enabled_port_mask & (1 << port_id)) == 0) {
-            printf("Skipping unused port %d\n", port_id);
-            continue;
-        }
-
-        /* start devide */
-        printf("Starting port %d ... \n", port_id);
-        ret = rte_eth_dev_start(port_id);
-        if (ret < 0) {
-            rte_exit(EXIT_FAILURE, "rte_eth_dev_start: "
-                "err=%d, port=%d\n", ret, port_id);
-        }
-
-        /* If enabled, put device in promiscuous mode.
-         * This allows IO forwarding mode to forward packets
-         * to itself through 2 cross connected ports of the
-         * target machine. */
-        if (promiscuous_on) {
-            rte_eth_promiscuous_enable(port_id);
-        }
-    }
-
-    /* check all ports link status */
-    check_all_ports_link_status((uint8_t)nb_ports, enabled_port_mask);
-
-    /* launch per-locre init on each lcore */
-    rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);
-    RTE_LCORE_FOREACH_SLAVE(lcore_id) {
-        if (rte_eal_wait_lcore(lcore_id) < 0 )
-            return -1;
-    }
-    
-    return 0;
-}
-
 
 /* main_loop */
 int
@@ -904,3 +778,213 @@ main_loop(__attribute__((unused)) void *dummy)
     }
 
 }
+
+
+
+/* init_dpdk */
+int
+init_dpdk()
+{
+    lcore_conf_t            qconf;
+    struct rte_eth_dev_info dev_info;
+    int                     ret;
+    unsigned                nb_ports;
+    uint16_t                queue_id;
+    unsigned                lcore_id;
+    uint32_t                nb_tx_queue;
+    uint32_t                nb_lcores;
+    uint8_t                 port_id;
+    uint8_t                 nb_rx_queue;
+    uint8_t                 queue;
+    uint8_t                 socket_id;
+
+    /* init EAL, done in config module */
+
+    /* config such features:
+     * -p              : enabled_port_mask
+     * -P              : promiscuous_on
+     * --config        : lcore_params, and nb_lcore_params
+     * --no_numa       : numa_on = 1
+     * --enable-jumbo  : port_conf.rxmode.jumbo_frame = 1
+     * --max-pkt-len   : port_conf.rxmode.max_rx_pkt_len = val 
+     * --hash-entry-num: hash_entry_num = val*/
+    ret = config_dpdk();
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Invalid config.");
+    }
+
+    if (check_lcore_params() < 0) {
+        rte_exit(EXIT_FAILURE, "check_lcore_params failed.\n");
+    }
+
+    ret = init_lcore_rx_queue();
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "init_lcore_params failed.\n");
+    }
+
+    nb_ports = rte_eth_dev_count();
+    if (nb_ports > RTE_MAX_ETHPORTS) {
+        nb_ports = RTE_MAX_ETHPORTS;
+    }
+
+    if (check_port_config(nb_ports) < 0) {
+        rte_exit(EXIT_FAILURE, "check_port_config failed.\n");
+    }
+
+    nb_lcores = rte_lcore_count();
+
+    /* init all ports */
+    for (port_id; port_id < nb_ports; port_id++) {
+        /* skip unused port */
+        if ((enabled_port_mask & (1 << port_id)) == 0) {
+            printf("Skipping unused port %d\n", port_id);
+            continue;
+        }
+
+        /* init port */
+        printf("Initializing port %d ...\n", port_id);
+        fflush(stdout);
+
+        nb_rx_queue = get_port_n_rx_queues(port_id);
+        nb_tx_queue  = m_config.num_tx_queue;
+        if (nb_tx_queue > MAX_TX_QUEUE_PER_PORT) {
+            nb_tx_queue = MAX_TX_QUEUE_PER_PORT;
+        }
+        ret = rte_eth_dev_configure(port_id, nb_rx_queue, 
+            (uint16_t)nb_tx_queue, &port_conf);
+        if (ret < 0) {
+            rte_exit(EXIT_FAILURE, "Cannot configure device:"
+                " err=%d, port=%d", ret, port_id);
+        } 
+
+        printf("Created queues: nb_rxq=%d, nb_txq=%u. ", 
+            nb_rx_queue, (unsigned)nb_tx_queue);
+        rte_eth_macaddr_get(port_id, &ports_eth_addr[port_id]);
+        print_ethaddr("Address:", &ports_eth_addr[port_id]);
+        printf(", ");
+
+
+        /* prepare dst and src MACs for each port. 
+         * TODO? why????? */
+        *(uint64_t *)(val_eth + port_id) = 
+            ETHER_LOCAL_ADMIN_ADDR + ((uint64_t)port_id << 40);
+        ether_addr_copy(&ports_eth_addr[port_id], 
+            (struct ether_addr *)(val_eth + port_id) + 1);
+
+        /* init memory */
+        ret = init_mem(NB_MBUF);
+        if (ret < 0) {
+            rte_exit(EXIT_FAILURE, "init_mem failed.\n");
+        }
+
+        /* init one TX queue per couple */
+        queue_id = 0;
+        for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+            /* skip unused lcore */
+            if (rte_lcore_is_enabled(lcore_id) == 0) {
+                printf("Skipping unused lcore %u.\n", lcore_id);
+                continue;
+            }
+
+            if (numa_on) {
+                socket_id = (uint8_t)rte_lcore_to_socket_id(lcore_id);
+            } else {
+                socket_id = 0;
+            }
+
+            printf("txq=%u,%d,%d\n", lcore_id, queue_id, socket_id);
+            fflush(stdout);
+
+            if (port_conf.rxmode.jumbo_frame) {
+                tx_conf.txq_flags = 0;
+            }
+            ret = rte_eth_tx_queue_setup(port_id, queue_id, 
+                nb_txd, socket_id, &tx_conf);
+            if (ret < 0) {
+                rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup: "
+                    "err=%d, port=%u", ret, port_id);
+            }
+            qconf = &lcore_conf[lcore_id];
+            qconf->tx_queue_id[port_id] = queue_id;
+            queue_id++;
+
+        }
+
+        printf("\n");
+    }
+
+    /* Init RX queues */
+    for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+        /* skip unused lcore */
+        if (rte_lcore_is_enabled(lcore_id) == 0) {
+            printf("Skipping unused lcore %u.\n", lcore_id);
+            continue;
+        }
+
+        qconf = &lcore_conf[lcore_id];
+        printf("Initializing rx queues on lcore %u ... \n", lcore_id);
+        fflush(stdout);
+
+        /* init RX queue */
+        for (queue = 0; queue < qconf->n_rx_queue; queue++) {
+            port_id = qconf->rx_queue_list[queue].port_id;
+            queue_id = qconf->rx_queue_list[queue].queue_id;
+
+            if (numa_on) {
+                socket_id = (uint8_t)rte_lcore_to_socket_id(lcore_id);
+            } else {
+                socket_id = 0;
+            }
+
+            printf("rxq=%d,%d,%d\n", port_id, queue_id, socket_id);
+            fflush(stdout);
+
+            ret = rte_eth_rx_queue_setup(port_id, queue_id, 
+                nb_rxd, socket_id, NULL, pktmbuf_pool[socket_id]);
+            if (ret < 0) {
+                rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup: "
+                    "err=%d, port=%d", ret, port_id);
+            }
+        }
+    }
+
+    printf("\n");
+
+    /* start ports */
+    for(port_id = 0; port_id < nb_ports; port_id++) {
+        /* skip unused port */
+        if ((enabled_port_mask & (1 << port_id)) == 0) {
+            printf("Skipping unused port %d\n", port_id);
+            continue;
+        }
+
+        /* start devide */
+        printf("Starting port %d ... \n", port_id);
+        ret = rte_eth_dev_start(port_id);
+        if (ret < 0) {
+            rte_exit(EXIT_FAILURE, "rte_eth_dev_start: "
+                "err=%d, port=%d\n", ret, port_id);
+        }
+
+        /* If enabled, put device in promiscuous mode.
+         * This allows IO forwarding mode to forward packets
+         * to itself through 2 cross connected ports of the
+         * target machine. */
+        if (promiscuous_on) {
+            rte_eth_promiscuous_enable(port_id);
+        }
+    }
+
+    /* check all ports link status */
+    check_all_ports_link_status((uint8_t)nb_ports, enabled_port_mask);
+
+    /* launch per-locre init on each lcore */
+    rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);
+    RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+        if (rte_eal_wait_lcore(lcore_id) < 0 )
+            return -1;
+    }
+    
+    return 0;
+}
+

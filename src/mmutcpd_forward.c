@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
     //dump_route_table();
     printf("\nConfig module OK!\n");
 
-
+	init_dpdk();
     
 
     return 0;

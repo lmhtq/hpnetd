@@ -3,7 +3,7 @@
 #if (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
 
 /* ipv4 hash crc */
-static inline uint32_t
+inline uint32_t
 ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len,
     uint32_t init_val)
 {
@@ -31,7 +31,7 @@ ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len,
 
 
 /* get ipv4 dest port */
-static inline uint8_t
+inline uint8_t
 get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id, 
     lookup_struct_t ipv4_l3fwd_lookup_struct)
 {
@@ -52,7 +52,7 @@ get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id,
 }
 
 /* simple ipv4  fwd 4pkts */
-static inline void
+inline void
 simple_ipv4_fwd_4pkts(struct rte_mbuf_t m[4], uint8_t port_id,
     lcore_conf_t qconf)
 {
@@ -195,7 +195,7 @@ simple_ipv4_fwd_4pkts(struct rte_mbuf_t m[4], uint8_t port_id,
 
 
 /* simple ipv4 fwd 1 pkt */
-static inline __attribute__((always_inline)) void
+inline __attribute__((always_inline)) void
 l3fwd_simple_forward(rte_mbuf_t m, uint8_t port_id, lcore_conf_t qconf)
 {
     ether_hdr_t  eth_hdr;
@@ -249,7 +249,7 @@ l3fwd_simple_forward(rte_mbuf_t m, uint8_t port_id, lcore_conf_t qconf)
  * - IP total length field must be >= IP header length field
  * if it is a invalid pkt, set dest port to BAD_PORT
  */
-static inline __attribute__((always_inline)) void
+inline __attribute__((always_inline)) void
 rfc1812_process(ipv4_hdr_t ipv4_hdr, uint16_t *dp, uint32_t flags)
 {
     uint8_t ihl;
@@ -271,7 +271,7 @@ rfc1812_process(ipv4_hdr_t ipv4_hdr, uint16_t *dp, uint32_t flags)
 
 
 /* convert ipv4 tuple into host format */
-static void convert_ipv4_5tuple(ipv4_5tuple_t key1, 
+void convert_ipv4_5tuple(ipv4_5tuple_t key1, 
     ipv4_5tuple_host_t, key2)
 {
     key2->ip_dst = rte_cpu_to_be_32(key1->ip_dst);
@@ -285,14 +285,14 @@ static void convert_ipv4_5tuple(ipv4_5tuple_t key1,
 }
 
 /* init ipv4_l3fwd_route_array */
-static int
+int
 init_ipv4_l3fwd_route_array(void)
 {
     /* TODO */
 }
 
 /* populate ipv4 few flow into table */
-static inline void
+inline void
 populate_ipv4_few_flow_into_table(const rte_hash_t h)
 {
     uint32_t i;
@@ -320,7 +320,7 @@ populate_ipv4_few_flow_into_table(const rte_hash_t h)
 
 /* populate ipv4 many flow into table */
 #define NUMBER_PORT_USED 4
-static inline void
+inline void
 populate_ipv4_many_flow_into_table(const rte_hash_t h, 
     unsigned int nr_flow)
 {
@@ -375,7 +375,7 @@ populate_ipv4_many_flow_into_table(const rte_hash_t h,
 }
 
 /* setup hash method for lookup */
-static void
+void
 setup_hash(int socket_id)
 {
     struct rte_hash_parameters ipv4_l3fwd_hash_params =

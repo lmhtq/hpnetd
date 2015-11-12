@@ -1,11 +1,34 @@
 #include "lpm.h"
-#include "forward.h"
 #include "config.h"
 
 #if (LOOKUP_METHOD == LOOKUP_LPM)
 
+/* DO_RFC_1812_CHECKS */
+inline __attribute__((always_inline)) void
+rfc1812_process(struct ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t flags)
+{
+
+	uint8_t ihl;
+
+	if ((flags & PKT_RX_IPV4_HDR) != 0) {
+
+
+		ihl = ipv4_hdr->version_ihl - IPV4_MIN_VER_IHL;
+
+		ipv4_hdr->time_to_live--;
+		ipv4_hdr->hdr_checksum++;
+
+		if (ihl > IPV4_MAX_VER_IHL_DIFF ||
+				((uint8_t)ipv4_hdr->total_length == 0 &&
+				 ipv4_hdr->total_length < IPV4_MIN_LEN_BE)) {
+
+			dp[0] = BAD_PORT;
+		}
+	}
+}
+
 /* get ipv4 dst port */
-static inline uint8_t
+inline uint8_t
 get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id, 
     lookup_struct_t ipv4_l3fwd_lookup_struct)
 {
@@ -19,8 +42,8 @@ get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id,
 }
 
 /* for enable multiple buffer optimize */
-#ifdef ENABLE_MULTI_BUFFER_OPTIMIZE == 1
-static inline __attribute__((always_inline)) uint16_t
+#if (ENABLE_MULTI_BUFFER_OPTIMIZE == 1)
+inline __attribute__((always_inline)) uint16_t
 get_dst_port(const lcore_conf_t qconf, rte_mbuf_t pkt, 
     uint32_t dst_ipv4, uint8_t port_id)
 {
@@ -33,7 +56,7 @@ get_dst_port(const lcore_conf_t qconf, rte_mbuf_t pkt,
     return next_hop;
 }
 
-static inline void
+inline void
 process_packet(lcore_conf_t qconf, rte_mbuf_t pkt,
     uint16_t *dst_port, uint8_t port_id)
 {
@@ -61,7 +84,7 @@ process_packet(lcore_conf_t qconf, rte_mbuf_t pkt,
 }
 
 /* read ol_flags and dst IPV4 address from 4 mubfs */
-static inline void
+inline void
 processx4_step1(rte_mbuf_t pkt[FWDSTEP], __m128i *dip, uint32_t *flag)
 {
     ipv4_hdr_t  ipv4_hdr;
@@ -93,7 +116,7 @@ processx4_step1(rte_mbuf_t pkt[FWDSTEP], __m128i *dip, uint32_t *flag)
 
 /* lookup into LPM fro dst port. If lookup fails, 
  * use incoming port(port_id) as dst port */
-static inline void
+inline void
 processx4_step2(const lcore_conf_t qconf, __m128i dip, uint32_t flag, 
     uint8_t port_id, rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
 {
@@ -115,7 +138,7 @@ processx4_step2(const lcore_conf_t qconf, __m128i dip, uint32_t flag,
 
 /* update src and dest mac address in ethernet header.
  * perfom rfc1812 checks and update for ipv4 packets */
-static inline void
+inline void
 processx4_step3(rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
 {
     __m128i te[FWDSTEP];
@@ -167,7 +190,7 @@ processx4_step3(rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
  * dp1 should contain:<a,b,c,d>, dp2:<b,c,d,e>
  * Make 4 comparisions at once and the result is 4 bit mask
  * The mask is used as an index into prebuild array of pnum values */
-static inline uint16_t *
+inline uint16_t *
 port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp, 
     __m128i dp1, __m128i dp2)
 {
@@ -302,7 +325,7 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp,
 
 
 /* init ipv4_l3fwd_route_array */
-static void
+void
 init_ipv4_l3fwd_route_array()
 {
     int i = 0;
@@ -315,7 +338,7 @@ init_ipv4_l3fwd_route_array()
 }
 
 /* setup LPM */
-static void
+void
 setup_lpm(int socket_id)
 {
     unsigned i;

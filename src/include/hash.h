@@ -1,7 +1,6 @@
 #ifndef __HASH_H_
 #define __HASH_H_
 
-#include "forward.h"
 #include "memstruct.h"
 #if (LOOKUP_METHOD == LOOKUP_EXACT_MATCH)
 
@@ -27,6 +26,7 @@
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 
+#include <rte_lpm.h>
 #include <rte_ip.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
@@ -49,8 +49,6 @@
 #include <rte_pci.h>
 #include <rte_random.h>
 
-#include "forward.h"
-
 #ifdef RTE_MACHINE_CPUFLAG_SSE4_2
 #include <rte_hash_crc.h>
 #define DEFAULT_HASH_FUN rte_hash_crc
@@ -58,7 +56,6 @@
 #include <rte_jhash.h>
 #define DEFAULT_HASH_FUN rte_jhash
 #endif
-
 
 /* struct of ipv4_5tuple */
 struct ipv4_5tuple
@@ -97,14 +94,15 @@ struct ipv4_l3fwd_route
 
 /* maximum number of l3fwd_route table */
 #define IPV4_L3FWD_NUM_ROUTES 1024
-static uint16_t ipv4_l3fwd_num_routes = 0;
+/* uint16_t ipv4_l3fwd_num_routes = 0; */
+extern uint16_t ipv4_l3fwd_num_routes;
 /* route table */
-static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
+struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
 
 /* lookup structure */
 typedef struct rte_hash *lookup_struct_t;
 typedef struct rte_hash * rte_hash_t;
-static lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
+lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
 
 #ifdef RTE_ARCH_x86_64
 /* default to 4 million hash entries (approx) */
@@ -116,23 +114,23 @@ static lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
 
 /* default number of hash entries */
 #define HASH_ENTRY_NUMBER_DEFAULT 4
-static uint32_t hash_entry_number = HASH_ENTRY_NUMBER_DEFAULT;
+uint32_t hash_entry_number = HASH_ENTRY_NUMBER_DEFAULT;
 
 /* ipv4 L3 fwd result */
-static uint8_t ipv4_l3fwd_out_if[L3FWD_HASH_ENTRIES] __rte_cache_aligned;
+uint8_t ipv4_l3fwd_out_if[L3FWD_HASH_ENTRIES] __rte_cache_aligned;
 
 /* ipv4 hash crc */
-static inline uint32_t
+inline uint32_t
 ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len,
     uint32_t init_val);
 
 /* three __m128i masks */
-static __m128i mask0;
-static __m128i mask1; /* no use, for ipv6*/
-static __m128i mask2; /* no use, for ipv6*/
+__m128i mask0;
+__m128i mask1; /* no use, for ipv6*/
+__m128i mask2; /* no use, for ipv6*/
 
 /* get ipv4 dest port */
-static inline uint8_t
+inline uint8_t
 get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id, 
     lookup_struct_t ipv4_l3fwd_lookup_struct);
 
@@ -144,14 +142,14 @@ get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id,
 #define EXECLUDE_4TH_PKT 0x7
 
 /* simple ipv4  fwd 4pkts */
-static inline void
+inline void
 simple_ipv4_fwd_4pkts(struct rte_mbuf_t m[4], uint8_t port_id,
     lcore_conf_t qconf);
 
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
 
 /* simple ipv4 fwd 1 pkt */
-static inline __attribute__((always_inline)) void
+inline __attribute__((always_inline)) void
 l3fwd_simple_forward(rte_mbuf_t m, uint8_t port_id, lcore_conf_t qconf);
 
 /* process rfc1812 */
@@ -168,19 +166,19 @@ l3fwd_simple_forward(rte_mbuf_t m, uint8_t port_id, lcore_conf_t qconf);
  * - IP total length field must be >= IP header length field
  * if it is a invalid pkt, set dest port to BAD_PORT
  */
-static inline __attribute__((always_inline)) void
+inline __attribute__((always_inline)) void
 rfc1812_process(ipv4_hdr_t ipv4_hdr, uint16_t *dp, uint32_t flags);
 #else
 #define rfc1812_process(mb, dp) do{} while(0)
 #endif /* DO_RFC_1812_CHECKS */
 
 /* convert ipv4 tuple into host format */
-static void convert_ipv4_5tuple(ipv4_5tuple_t key1, 
+void convert_ipv4_5tuple(ipv4_5tuple_t key1, 
     ipv4_5tuple_host_t, key2);
 
 
 /* init ipv4_l3fwd_route_array */
-static int
+int
 init_ipv4_l3fwd_route_array(void);
 
 #define BYTE_VALUE_MAX 256
@@ -188,17 +186,17 @@ init_ipv4_l3fwd_route_array(void);
 #define BIT_8_TO_15 0x0000ff00
 
 /* populate ipv4 few flow into table */
-static inline void
+inline void
 populate_ipv4_few_flow_into_table(const rte_hash_t h);
 
 /* populate ipv4 many flow into table */
 #define NUMBER_PORT_USED 4
-static inline void
+inline void
 populate_ipv4_many_flow_into_table(const rte_hash_t h, 
     unsigned int nr_flow);
 
 /* setup hash method for lookup */
-static void
+void
 setup_hash(int socket_id);
 
 #endif /* LOOKUP_METHOD == LOOKUP_EXACT_MATCH */

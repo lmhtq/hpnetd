@@ -2,7 +2,6 @@
 #define __LPM_H_
 
 #include "memstruct.h"
-#include "forward.h"
 #if (LOOKUP_METHOD == LOOKUP_LPM)
 
 #include <stdio.h>
@@ -27,6 +26,7 @@
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 
+#include <rte_lpm.h>
 #include <rte_ip.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
@@ -49,35 +49,53 @@
 #include <rte_pci.h>
 #include <rte_random.h>
 
+/* DO_RFC_1812_CHECKS */
+#define	IPV4_MIN_VER_IHL	0x45
+#define	IPV4_MAX_VER_IHL	0x4f
+#define	IPV4_MAX_VER_IHL_DIFF	(IPV4_MAX_VER_IHL - IPV4_MIN_VER_IHL)
+
+/* Minimum value of IPV4 total length (20B) in network byte order. */
+#define	IPV4_MIN_LEN_BE	(sizeof(struct ipv4_hdr) << 8)
+
+/* IP version number must be 4.
+ * IP header length field must be large enough to hold the
+ * minimum length legal IP datagram (20 bytes = 5 words).
+ * The IP total length field must be large enough to hold the IP
+ * datagram header, whose length is specified in the IP header length
+ * field.
+ * If we encounter invalid IPV4 packet, then set destination port for it
+ * to BAD_PORT value. */
+inline __attribute__((always_inline)) void
+rfc1812_process(struct ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t flags);
 
 /* get ipv4 dst port */
-static inline uint8_t
+inline uint8_t
 get_ipv4_dst_port(void *ipv4_hdr, uint8_t port_id, 
     lookup_struct_t ipv4_l3fwd_lookup_struct);
 
 /* for enable multiple buffer optimize */
 #if (ENABLE_MULTI_BUFFER_OPTIMIZE == 1)
-static inline __attribute__((always_inline)) uint16_t
+inline __attribute__((always_inline)) uint16_t
 get_dst_port(const lcore_conf_t qconf, rte_mbuf_t pkt, 
     uint32_t dst_ipv4, uint8_t port_id);
 
-static inline void
+inline void
 process_packet(lcore_conf_t qconf, rte_mbuf_t pkt,
     uint16_t *dst_port, uint8_t port_id);
 
 /* read ol_flags and dst IPV4 address from 4 mubfs */
-static inline void
+inline void
 processx4_step1(rte_mbuf_t pkt[FWDSTEP], __m128i *dip, uint32_t *flag);
 
 /* lookup into LPM fro dst port. If lookup fails, 
  * use incoming port(port_id) as dst port */
-static inline void
+inline void
 processx4_step2(const lcore_conf_t qconf, __m128i dip, uint32_t flag, 
     uint8_t port_id, rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP]);
 
 /* update src and dest mac address in ethernet header.
  * perfom rfc1812 checks and update for ipv4 packets */
-static inline void
+inline void
 processx4_step3(rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP]);
 
 /* Group consecutive pkts with the same dest port into one burst.
@@ -106,18 +124,18 @@ processx4_step3(rte_mbuf_t pkt[FWDSTEP], uint16_t dst_port[FWDSTEP]);
  * dp1 should contain:<a,b,c,d>, dp2:<b,c,d,e>
  * Make 4 comparisions at once and the result is 4 bit mask
  * The mask is used as an index into prebuild array of pnum values */
-static inline uint16_t *
+inline uint16_t *
 port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp, 
     __m128i dp1, __m128i dp2);
 
 #endif /* ENABLE_MULTI_BUFFER_OPTIMIZE == 1 */
 
 /* init ipv4_l3fwd_route_array */
-static void
+void
 init_ipv4_l3fwd_route_array();
 
 /* setup LPM */
-static void
+void
 setup_lpm(int socket_id);
 
 #endif /* LOOKUP_METHOD == LOOKUP_LPM */

@@ -23,6 +23,7 @@
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 
+#include <rte_lpm.h>
 #include <rte_ip.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
@@ -44,6 +45,30 @@
 #include <rte_interrupts.h>
 #include <rte_pci.h>
 #include <rte_random.h>
+
+
+/* forward method */
+/* look up method */
+#define LOOKUP_EXACT_MATCH 0
+#define LOOKUP_LPM 1
+#ifndef LOOKUP_METHOD
+#define LOOKUP_METHOD LOOKUP_LPM
+#endif
+
+#ifndef __SSE4_1__
+#define __SSE4_1__
+#endif
+
+/* 
+ * When set to 0, simple forwrding path is enabled
+ * When set to 1, optimized forwarding is enabled.(use sse4.1)
+ */
+
+#if ((LOOKUP_METHOD == LOOKUP_LPM) && !defined(__SSE4_1__))
+#define ENABLE_MULTI_BUFFER_OPTIMIZE 0
+#else
+#define ENABLE_MULTI_BUFFER_OPTIMIZE 1
+#endif
 
 /* DPDK data structures */
 /* the size of jambo pkt */
@@ -87,24 +112,29 @@
 /* number of RX/TX ring descriptors */
 #define RTE_TEST_RX_DESC_DEFAULT 128
 #define RTE_TEST_TX_DESC_DEFAULT 512
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+/*uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
+uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;*/
+extern uint16_t nb_rxd;
+extern uint16_t nb_txd;
 
 /* nic mac of ports */
-static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
-static __m128i val_eth[RTE_MAX_ETHPORTS];
+struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
+__m128i val_eth[RTE_MAX_ETHPORTS];
 
 /* replace the first 12Bytes of the ether header */
 #define MASK_ETH 0x3f
 
 /* mask of enabled ports */
-static uint32_t enabled_port_mask = 0;
+/* int32_t enabled_port_mask = 0;*/
+extern int32_t enabled_port_mask;
 
-/**< port set in promiscuous mode off by default */
-static int promiscuous_on = 0;
+/**< port set in promiscuous mode on by default */
+/* int promiscuous_on = 1;*/
+extern int promiscuous_on;
 
 /**< NUMA is enabled by default  */
-static int numa_on = 1;
+/* int numa_on = 1;*/
+extern int numa_on;
 
 /* struct of m_buf table */
 typedef struct rte_mbuf *rte_mbuf_t;
@@ -141,70 +171,25 @@ typedef struct lcore_params *lcore_params_t;
 
 /* maximum size of lcore params array */
 #define MAX_LCORE_PARAMS 1024
-static struct lcore_params lcore_params_array[MAX_LCORE_PARAMS];
+/* struct lcore_params lcore_params_array[MAX_LCORE_PARAMS];*/
+extern struct lcore_params lcore_params_array[];
 
 /* it is a pointer, same as lcore_params_array */
-static struct lcore_params * lcore_params = lcore_params_array;
+/* struct lcore_params * lcore_params = lcore_params_array;*/
+extern struct lcore_params * lcore_params;
 
 /* number of lcore_params */
-static uint16_t nb_lcore_params = 0;
+/* uint16_t nb_lcore_params = 0; */
+extern uint16_t nb_lcore_params;
 
 /* config of nic port */
-static struct rte_eth_conf port_conf = {
-    .rxmode = {
-        /* multi-queue pkt distribution mode to be used. eg RSS */
-        .mq_mode = ETH_MQ_RX_RSS, 
-        /* only used if jumbo_frame is enabled */
-        .max_rx_pkt_len = ETHER_MAX_LEN,
-        /* hdr buf size (header_split enabled) */
-        .split_hdr_size = 0,
-        /**< header split disabled */
-        .header_split = 0,
-        /**< IP checksum offload enabled */
-        .hw_ip_checksum = 1,
-        /**< VLAN filtering disabled */
-        .hw_vlan_filter = 0,
-        /**< jumbo frame support disabled */
-        .jumbo_frame = 0,
-        /**< CRC stripped by hardware */
-        .hw_strip_crc = 0,
-    },
-    .rx_adv_conf = {
-        .rss_conf = {
-            .rss_key = NULL,
-            .rss_hf = ETH_RSS_TCP,
-        }
-    },
-    .txmode = {
-        .mq_mode = ETH_MQ_TX_NONE,
-    }
-};
-
-/* rx_conf */
-static struct rte_eth_rxconf rx_conf = {
-    .rx_thresh = {
-        .pthresh = 8,  /* RX prefetch threshold reg */
-        .hthresh = 8,  /* RX host threshold reg */
-        .wthresh = 4,  /* RX write-back threshold reg */
-    },
-    .rx_free_thresh = 32,
-}; 
-
-/* tx_conf */
-static struct rte_eth_txconf tx_conf = {
-    .tx_thresh = {
-        .pthresh = 36,  /* TX prefetch threshold reg */
-        .hthresh = 0,   /* TX host threshold reg */
-        .wthresh = 0,   /* TX write-back threshold reg */
-    },
-    .tx_free_thresh = 0, /* PMD default */
-    .tx_rs_thresh   = 0, /* PMD default */
-    .txq_flags      = 0.
-};
+extern struct rte_eth_conf port_conf;
+extern struct rte_eth_txconf tx_conf;
+extern struct rte_eth_rxconf rx_conf;
 
 /* pktmbuf pool */
 typedef struct rte_mempool *rte_mempool_t;
-static rte_mempool_t pktmbuf_pool[NB_SOCKETS];
+rte_mempool_t pktmbuf_pool[NB_SOCKETS];
 
 /* struct of ipv4_l3fwd_route */
 struct ipv4_l3fwd_route {
@@ -215,14 +200,15 @@ struct ipv4_l3fwd_route {
 
 /* maximum number of l3fwd_route table */
 #define IPV4_L3FWD_NUM_ROUTES 1024
-static uint16_t ipv4_l3fwd_num_routes = 0;
+/*uint16_t ipv4_l3fwd_num_routes = 0;*/
+extern uint16_t ipv4_l3fwd_num_routes;
 /* route table */
-static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
+struct ipv4_l3fwd_route ipv4_l3fwd_route_array[IPV4_L3FWD_NUM_ROUTES];
 
 /* maximum number of rules */
 #define IPV4_L3FWD_LPM_MAX_RULES 1024
 typedef struct rte_lpm *lookup_struct_t;
-static lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
+lookup_struct_t ipv4_l3fwd_lookup_struct[NB_SOCKETS];
 
 /* some typedef */
 typedef struct ipv4_hdr * ipv4_hdr_t;
@@ -242,9 +228,11 @@ struct lcore_conf
 typedef struct lcore_conf *lcore_conf_t;
 
 /* config of per lcore */
-static struct lcore_conf lcore_conf_array[RTE_MAX_LCORE];
+/* struct lcore_conf lcore_conf_array[RTE_MAX_LCORE];*/
+extern struct lcore_conf lcore_conf_array[];
 
 /* it is a pointer, same as lcore_conf_array */
-static lcore_conf_t lcore_conf = lcore_conf_array;
+/* lcore_conf_t lcore_conf = lcore_conf_array;*/
+extern lcore_conf_t lcore_conf;
 
 #endif /* __MEMSTRUCT_H_ */
