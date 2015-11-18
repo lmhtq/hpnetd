@@ -14,9 +14,15 @@
 
 typedef struct config_variables config_variables_t;
 #define MAX_NICS 16
+#define MAX_CPUS 16
 #define MAX_ARPS 1024
 #define MAX_ROUTES 1024
 #define _DEVELOP_
+
+
+#define TCP_OPT_SACK_ENABLED 0
+#define USE_SPIN_LOCK 0
+#define BLOCKING_SUPPORT 0
 
 /* struct of a NIC */
 struct nic_info
