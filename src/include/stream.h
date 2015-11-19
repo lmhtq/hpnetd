@@ -111,8 +111,9 @@ struct tcp_send_vars
     /* RTO vars */
     uint8_t  nrtx;            /* number of retransmission */
     uint8_t  max_nrtx;        /* max number of retransmission */
-    uint32_t rto;             /* RTO */
-    uint32_t ts_rto;          /* timestamp of RTO */
+    uint32_t rto;             /* the value of RTO (a time interval) */
+    uint32_t ts_rto;          /* timestamp of RTO (after it, 
+                                 mean the stream timeout) */
 
     /* congestion control vars */
     uint32_t cwnd;            /* congestion window */
