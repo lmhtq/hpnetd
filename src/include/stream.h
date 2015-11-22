@@ -90,6 +90,7 @@ struct tcp_recv_vars
 #endif/* BLOCKING_SUPPORT */
 
 };
+typedef struct tcp_recv_vars * tcp_recv_vars_t;
 
 struct tcp_send_vars
 {
@@ -158,6 +159,7 @@ struct tcp_send_vars
     pthread_cond_t write_cond;
 #endif
 };
+typedef struct tcp_send_vars * tcp_send_vars_t;
 
 struct tcp_stream
 {

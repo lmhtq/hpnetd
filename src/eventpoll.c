@@ -1,4 +1,5 @@
-#include "eventepoll.h"
+#include "eventpoll.h"
+#include "config.h"
 
 /* init event queue */
 event_queue_t
@@ -8,8 +9,8 @@ init_event_queue(int size)
 
     eq = (event_queue_t)calloc(1, sizeof(struct event_queue));
     if (!eq) {
-        fprintf(stderr, "Create event_queue node failed! 
-            %s:%s\n", __FILE__, __LINE__));
+        fprintf(stderr, "Create event_queue node failed!" 
+            "%s:%s\n", __FILE__, __LINE__));
         return NULL;
     }
 
@@ -17,8 +18,8 @@ init_event_queue(int size)
     eq->size = size;
     eq->events = (event_t)calloc(size, sizeof(struct event));
     if (!eq->events) {
-        fprintf(stderr, "Create event_queue failed! 
-            %s:%s\n", __FILE__, __LINE__));
+        fprintf(stderr, "Create event_queue failed!" 
+            "%s:%s\n", __FILE__, __LINE__));
         return NULL;    
     }
     eq->num_events = 0;
@@ -40,45 +41,50 @@ free_event_queue(event_queue_t eq)
     free(eq);
 }
 
-/* TODO */
+
+/* mmutcpd epoll init 
+ * after this, it can be used to create many sockets.
+ * in other words, can use many mmutpcd_epoll_create*/
 int 
-mmutcpd_epoll_create(mctx_t mctx, int size)
+mmutcpd_epoll_init(int cpu_id, int size)
 {
-    mmutcpd_manager_t mmutcpd = g_mmutcpd[mctx->cpu];
-    struct mmutcpd_epoll *ep;
-    socket_map_t epsocket;
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    stream_queue_t    skq;
+    mmutcpd_epoll_t   ep;
 
     if (size <= 0) {
-        errno = EINVAL;
+        fprintf(stderr, "epoll create failed in size!\n", 
+            "%s:%s\n", __FILE__, __LINE__));
         return -1;
     }
 
+    skq = init_socket_queue(size);
+    if (!skq) {
+        fprintf(stderr, "socket_queue create failed!\n"
+            "%s:%s\n", __FILE__, __LINE__));
+        return -1;
+    }
+    mmt->socketq = skq;
+
     ep = (struct mmutcpd_epoll *)calloc(1, sizeof(struct mmutcpd_epoll));
     if (!ep) {
-        free_socket(mctx, epsocket->id, FALSE);
+        fprintf(stderr, "epoll create failed!\n"
+            "%s:%s\n", __FILE__, __LINE__));
         return -1;
     }
 
     /* create event queues */
-    ep->usr_queue = init_event_queue(size);
-    if (!ep->usr_queue)
+    ep->apps_queue = init_event_queue(size);
+    if (!ep->apps_queue)
         return -1;
-
-    ep->usr_shadow_queue = init_event_queue(size);
-    if (!ep->usr_shadow_queue) {
-        free_event_queue(ep->usr_queue);
-        return -1;
-    }
 
     ep->mmutcpd_queue = init_event_queue(size);
     if (!ep->mmutcpd_queue) {
-        free_event_queue(ep->usr_queue);
-        free_event_queue(ep->usr_shadow_queue);
+        free_event_queue(ep->apps_queue);
         return -1;
     }
 
     mmutcpd->ep = ep;
-    epsocket->ep = ep;
 
     if (pthread_mutex_init(&ep->epoll_lock, NULL)) {
         return -1;
@@ -87,43 +93,204 @@ mmutcpd_epoll_create(mctx_t mctx, int size)
         return -1;
     }
 
-    return epsocket->id;
+}
+
+/* mmutcpd epoll create one socket */
+int 
+mmutcpd_epoll_create(int cpu_id)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[mctx->cpu];
+    mmutcpd_epoll_t   ep;
+    socket_t          sk;
+
+    ep = mmt->ep;
+
+    sk = allocate_socket(cpu_id, SOCK_EPOLL, TRUE);
+    if (!sk) {
+        return NULL;
+    }
+    
+    sk->ep = ep;
+
+    return sk->id;
 }
 
 
-/* TODO */
-int 
-EPoll_close(mctx_t mctx, int epid)
+/* mmutcpd epoll close one socket */
+void
+mmutcpd_epoll_close(int cpu_id, int ep_id)
 {
-    mmutcpd_manager_t mmutcpd;
-    struct EPoll *ep;
+    /* close epoll socket */
+    free_socket(cpu_id, ep_id);
+}
 
-    mmutcpd = GetmmutcpdManager(mctx);
-    if (!mmutcpd) {
-        return -1;
-    }
 
-    ep = mmutcpd->smap[epid].ep;
+/* mmutcpd epoll destroy 
+ * pair use with mmutcpd epoll init */
+void 
+mmutcpd_epoll_destroy(int cpu_id)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    stream_queue_t    skq;
+    mmutcpd_epoll_t   ep;
+
+    ep = mmt->ep;
     if (!ep) {
         errno = EINVAL;
         return -1;
     }
 
-    free_event_queue(ep->usr_queue);
-    free_event_queue(ep->usr_shadow_queue);
+    /* free event queues */
+    free_event_queue(ep->apps_queue);
     free_event_queue(ep->mmutcpd_queue);
-    free(ep);
 
+    /* destroy lock */
     pthread_mutex_lock(&ep->epoll_lock);
-    mmutcpd->ep = NULL;
-    mmutcpd->smap[epid].ep = NULL;
     pthread_cond_signal(&ep->epoll_cond);
     pthread_mutex_unlock(&ep->epoll_lock);
 
     pthread_cond_destroy(&ep->epoll_cond);
-    pthread_mutex_destroy(&ep->epoll_lock);
+    pthread_cond_destroy(&ep->epoll_lock);
+    free(ep);
 
-    return 0;
+    /* free socket queue */
+    free_socket_queue(skq);
+}
+
+
+/* generate stream events */
+inline int 
+generate_stream_events(mmutcpd_manager_t mmt, 
+    mmutcpd_epoll_t ep, socket_t sk)
+{
+    tcp_stream_t stream = sk->stream;
+
+    if (!stream) {
+        fprintf(stderr, "stream is NULL!"
+            "%s:%s\n", __FILE__, __LINE__);
+        return -1;
+    }
+    if (stream->state < TCP_ESTABLISHED) {
+        fprintf(stderr, "stream has not established!"
+            "%s:%s\n", __FILE__, __LINE__);
+        return -1;
+    }
+
+    /* generate read events */
+    if (sk->event_type & EPOLL_IN) {
+        tcp_recv_vars_t rcv_var = stream->rcv_var;
+        if (rcv_var->rcvbuf && rcv_var->rcvbuf->merged_len > 0) {
+            /* add a read event */
+            add_epoll_event(ep, USR_SHADOW_EVENT_QUEUE, sk, EPOLL_IN);
+        } else if (stream->state == TCP_CLOSE_WAIT) {
+            /* add a close event */
+            /* TODO: ?? why use two??? I one is enough! */
+            add_epoll_event(ep, USR_SHADOW_EVENT_QUEUE, sk, EPOLL_IN);
+        }
+    }
+
+    /* generate write event */
+    if (sk->event_type & EPOLL_OUT) {
+        tcp_send_vars_t snd_var = stream->snd_var;
+        if (!snd_var->sndbuf || 
+            (snd_var->sndbuf && snd_var->sndbuf->len < snd_var->snd_wnd)) {
+            /* TODO: mtcp maybe wrong here! */
+            /* add a write event */
+            add_epoll_event(ep, USR_SHADOW_EVENT_QUEUE, sk, EPOLL_OUT);
+        }
+    }
+}
+
+
+/* mmutcpd epoll control */
+int mmutcpd_epoll_ctl(int cpu_id, int ep_id, int op, 
+    int sockid, event_t ev)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    mmutcpd_epoll_t   ep;
+    socket_t          sk;
+    uint32_t          event_type;
+
+    if (ep_id < 0 || ep_id >= m_config.max_concurrency) {
+        fprintf(stderr, "ep_id out of range!\n"
+            "%s:%s\n", __FILE__, __LINE__));
+        return -1;
+    }
+
+    if (sockid < 0 || sockid >= m_config.max_concurrency) {
+        fprintf(stderr, "sockid out of range!\n"
+            "%s:%s\n", __FILE__, __LINE__));
+        return -1;
+    }
+
+    if (mmt->socketq[ep_id].socktype != SOCK_EPOLL) {
+        fprintf(stderr, "socket init failed before!"
+            " socktype is not SOCK_EPOLL!\n"
+            "%s:%s\n", __FILE__, __LINE__));
+        return -1;
+    }
+
+    ep = mmt->socketq[ep_id].ep;
+    if (!eq) {
+        fprintf(stderr, "socket_queue init failed before!"
+            " its ep is invalid!\n"
+            "%s:%s\n", __FILE__, __LINE__));
+        return -1;
+    }
+
+    if (!(ev || op == EPOLL_CTRL_DEL)) {
+        fprintf(stderr, "Invalid value of ev or op."
+            "%s:%s\n", __FILE__, __LINE__));
+        return -1;
+    } 
+
+    sk = &mmt->socketq[ep_id];
+
+    if (op == EPOLL_CTRL_ADD) {/* add a event */
+        if (sk->sockid) {
+            fprintf(stderr, "this socket's event sockid "
+                "has been set!%s:%s\n", __FILE__, __LINE__));
+            return -1;
+        }
+
+        event_type = ev->event_type;
+        event_type |= (EPOLL_ERR | EPOLL_HUP);/* registered as default */
+        sk->event_type = event_type;
+        sk->sockid = ev->sockid;
+
+        /* TODO: other socktype:pipe */
+        if (sk->socktype == SOCK_STREAM)
+            generate_stream_events(mmt, ep, sk);
+
+    } else if (op == EPOLL_CTRL_MOD) {
+        if (!sk->sockid) {
+            /* ?? */
+            pthread_mutex_unlock(&ep->epoll_lock);
+            fprintf(stderr, "EPOLL_CTRL_MOD failed, origin sockid does not exsit."
+                "%s:%s\n", __FILE__, __LINE__));
+            return -1;
+        }
+
+        event_type = ev->event_type;
+        event_type |= (EPOLL_ERR | EPOLL_HUP);
+        sk->event_type = ev->event_type;
+        sk->sockid = ev->sockid;
+
+        /* TODO: other socktype:pipe */
+        if (sk->socktype == SOCK_STREAM)
+            generate_stream_events(mmt, ep, sk);
+
+    } else if ( op == EPOLL_CTRL_DEL ) {
+        if (!sk->sockid) {
+            fprintf(stderr, "EPOLL_CTRL_DEL failed, origin sockid does not exsit."
+                "%s:%s\n", __FILE__, __LINE__));
+            return -1;
+        }
+
+        sk->event_type = EPOLL_NONE;
+
+    }
+
 }
 
 /* TODO */
