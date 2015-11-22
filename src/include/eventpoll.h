@@ -20,11 +20,29 @@ enum event_type
     EPOLL_ET = (1 << 32)
 };
 
+/* event_queue type */
+enum event_queue_type
+{
+    APP_QUEUE = 0,
+    MMUTCPD_QUEUE,
+    RW_QUEUE
+};
+
+/* epoll data */
+typedef union epoll_data
+{
+    void     *ptr;
+    int      sockid;
+    uint32_t u32;
+    uint64_t u64;
+} epoll_data_t;
+
 /* basic event struct: type and its id */
 struct event
 {
-    uint32_t event_type;
-    uint32_t sockid;
+    uint32_t     events;
+    epoll_data_t data;
+    int          sockid;
 };
 typedef struct event * event_t;
 
@@ -44,10 +62,12 @@ typedef struct event_queue * event_queue_t;
  * It maintains such things: apps' events, this cpu's mmutcpd' events */
 struct mmutcpd_epoll
 {
-    /* apps' events queue */
+    /* apps' events queue, mainly related to socket */
     event_queue_t apps_queue;
     /* internal events queue */
     event_queue_t mmutcpd_queue;
+    /* r/w event queue, mainly related to tcp */
+    event_queue_t rw_queue;
 
     uint8_t waiting;
     pthread_cond_t  epoll_cond;
@@ -86,9 +106,24 @@ mmutcpd_epoll_destroy(int cpu_id);
 int mmutcpd_epoll_ctl(int cpu_id, int ep_id, int op, 
     int sockid, event_t ev);
 
-/* rasie stream event */
+/* generate stream event */
 inline int 
 generate_stream_events(mmutcpd_manager_t mmt, 
     mmutcpd_epoll_t ep, socket_t sk);
+
+/* add a epoll event */
+inline int
+add_epoll_event(mmutcpd_epoll_t ep, int queue_type, 
+    socket_t sk, uint32_t event_type);
+
+/* mmutcpd_epoll_wait */
+int 
+mmutcpd_epoll_wait(int cpu_id, int ep_id, event_t events, 
+    int max_events, int timeout);
+
+/* fetch epoll event */
+inline int 
+fetch_epoll_events(mmutcpd_manager_t mmt, event_queue_t eq;
+    int max_events);
 
 #endif /* _EVENTPOLL_H_ */

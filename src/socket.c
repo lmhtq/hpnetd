@@ -69,8 +69,9 @@ allocate_socket(int cpu_id, int socktype, int needlock)
     sk.socktype = socktype;
     sk.opts = 0;
     sk.valid = 1;
-    sk.sockid = 0;
-    sk.event_type = 0;
+    sk.epoll = 0;
+    sk.events = 0;
+    memset(&sk->ep_data, 0, sizeof(epoll_data_t));
 
     pthread_mutex_unlock(&skq->socketq_lock);
 
