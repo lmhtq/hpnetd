@@ -296,6 +296,7 @@ mmutcpd_setsock_nonblock(int cpu_id, int sockid)
 
 
 /* socket ioctl */
+int 
 mmutcpd_socket_ioctl(int cpu_id, int sockid, int request, void *argp)
 {
     mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
@@ -347,6 +348,7 @@ mmutcpd_socket_ioctl(int cpu_id, int sockid, int request, void *argp)
 
 
 /* create a socket */
+int 
 mmutcpd_socket(int cpu_id, int domain, int type, int protocol)
 {
     mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
@@ -380,6 +382,7 @@ mmutcpd_socket(int cpu_id, int domain, int type, int protocol)
 
 
 /* socket bind */
+int 
 mmutcpd_bind(int cpu_id, int sockid, const struct sockaddr *addr, 
     socklen_t addrlen)
 {
@@ -446,6 +449,7 @@ mmutcpd_bind(int cpu_id, int sockid, const struct sockaddr *addr,
 
 
 /* socket listen */
+int 
 mmutcpd_listen(int cpu_id, int sockid, int backlog)
 {
     mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
@@ -515,6 +519,348 @@ mmutcpd_listen(int cpu_id, int sockid, int backlog)
 
     sk.listener = listener;
     mmt->listener = listener;
+
+    return 0;
+}
+
+
+/* socket accept */
+/* origin accept() */
+/* addr: the client side addr  */
+int 
+mmutcpd_accept(int cpu_id, int sockid, struct sockaddr *addr, 
+    socklen_t *addrlen)
+{
+    mmutcpd_manager_t  mmt = g_sender[cpu_id];
+    socket_map_t       sk;
+    tcp_listener_t     listener;
+    tcp_stream_t       accepted = NULL;
+    struct sockaddr_in *addr_in;
+
+    if (!mmt) {
+        return -1;
+    }
+
+    if (sockid < 0 || sockid >= m_config.max_concurrency) {
+        fprintf(stderr, 
+            "Socket id %d out of range.\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    sk = &mmt->socketq[sockid];
+    if (sk->socktype != SOCK_LISTENER) {
+        fprintf(stderr, 
+            "Socket id %d is not listening socket\n", sockid);
+        errno = EINVAL;
+        return -1;
+    }
+
+    listener = sk.listener;
+
+    /* try to directly get the first item of accept queue without lock */
+    /* if get nothing, require lock and wait */
+    accepted = stream_dequeue(listener->acceptq);
+    if (!accepted) {
+        if (listener->sk->opts & NON_BLOCK) {
+            errno = EAGAIN;
+            return -1;
+        } else {
+            pthread_mutex_lock(&listener->accept_lock);
+            while ((accepted = stream_dequeue(listener->acceptq)) == NULL) {
+                pthread_cond_wait(&listener->accept_cond, 
+                    &listener->accept_lock);
+                if (mmt->ctx->done || mmt->ctx->exit) {
+                    pthread_mutex_unlock(&listener->accept_lock);
+                    errno = EINTR;
+                    return -1;   
+                }
+            }
+            pthread_mutex_unlock(&listener->accept_lock);
+        }
+    }
+
+    if (!accepted) {
+        fprintf(stderr, 
+            "Empty accept queue!\n", );
+    }
+
+    if (!accepted->sk) {
+        sk = allocate_socket(cpu_id, SOCK_STREAM, FALSE);
+        if (!sk) {
+            /* TODO: destroy the stream */
+            errno = ENFILE;
+            return -1;
+        }
+        sk->stream = accepted;
+        accepted->sk = sk;
+    }
+
+    /*TODO: trace info*/
+
+    if (addr && addrlen) {
+        addr_in = (struct sockaddr_in *)addr;
+        addr_in->sin_family = AF_INET;
+        addr_in->sin_port = accepted->dport;
+        addr_in->sin_addr.s_addr = accepted->daddr;
+        *addrlen = sizeof(struct sockaddr_in);
+    }
+
+    return accepted->sk->id;
+}
+
+
+/* socket connect */
+int 
+mmutcpd_connect(int cpu_id, int sockid, const struct sockaddr *addr, 
+    socklen_t addrlen)
+{
+    mmutcpd_manager_t  mmt = g_mmutcpd[cpu_id];
+    socket_map_t       sk;
+    tcp_stream_t       cur;
+    struct sockaddr_in *addr_in;
+    in_addr_t          dip;
+    in_port_t          dport;
+    int                is_dyn_bound = FALSE;
+    int                ret;
+    int                rss_core;
+
+    if (!mmt) {
+        return -1;
+    }
+
+    if (sockid < 0 || sockid >= m_config.max_concurrency) {
+        fprintf(stderr, 
+            "Socket id %d out of range.\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    sk = &mmt->socketq[sockid];
+    if (sk->socktype == SOCK_UNUSED) {
+        fprintf(stderr, 
+            "Invalid socket id %d\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    if (sk->socktype != SOCK_STREAM) {
+        fprintf(stderr, 
+            "Socket id %d is not a stream socket\n", sockid);
+        errno = ENOTSCOK;
+        return -1;
+    }
+
+    if (!addr) {
+        fprintf(stderr, 
+            "Socket id %d, empty address.\n", sockid);
+        errno = EFAULT;
+        return -1;
+    }
+
+    /* just support AF_INET */
+    if (addr->sa_family != AF_INET || 
+        addrlen < sizeof(struct sockaddr_in)) {
+        fprintf(stderr, 
+            "Socket id %d: invalid arguments\n", sockid);
+        errno = EAFNOSUPPORT;
+        return -1;
+    }
+
+    sk = &mmt->socketq[sockid];
+    if (sk->stream) {
+        fprintf(stderr, 
+            "Socket id %d, stream already exist.\n", sockid);
+        if (sk->stream->state >= TCP_ESTABLISHED) {
+            errno = EISCONN;
+        } else {
+            errno = EALREADY;
+        }
+        return -1;
+    }
+
+    addr_in = (struct sockaddr_in *)addr;
+    dip = addr_in.s_addr;
+    dport = addr_in.sin_port;
+
+    /* address binding */
+    if (sk->opts & ADDR_BIND) {
+        /* TODO: */
+        rss_core = get_rss_cpu_core(sk->sin_addr.s_addr, dip,
+            sk->saddr.sin_port, dport, num_queues);
+        if (rss_core != cpu_id) {
+            errno = EINVAL;
+            return -1;
+        }
+    } else {
+        /* TODO: address_pool */
+        if (mmt->ap) {
+            ret = fetch_address(mmt->ap, cpu_id, 
+                num_queues, addr_in, &sk->saddr);
+        } else {
+            ret = fetch_address(mmt->ap, cpu_id, 
+                num_queues, addr_in, &sk->saddr);
+        }
+
+        if (ret < 0) {
+            errno = EAGAIN;
+            return -1;
+        }
+        sk->opts |= ADDR_BIND;
+        is_dyn_bound = TRUE;
+    }
+
+    cur = create_tcp_stream(mmt, sk, sk->socktype, 
+        sk->saddr.sin_addr.s_addr, sk->saddr.sin_port, dip, dport);
+    if (!cur) {
+        fprintf(stderr, 
+            "Socket id %s, failed to create tcp stream\n", sockid);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    if (is_dyn_bound) {
+        cur->is_bound_addr = TRUE;
+    }
+
+    /* tcp stream snd_var */
+    cur->snd_var->cwnd = 1;
+    cur->snd_var->ssthresh = cur->snd_var->mss * 10;
+
+    /* tcp stream state */
+    cur->state = TCP_SYN_SENT;
+
+    /* TODO: stream queue lock? */
+    ret = stream_enqueue(mmt->connectq, cur);
+    mmt->wakeup_flag = TRUE;
+    if (ret < 0) {
+        fprintf(stderr, 
+            "Socket id %d, failed to enqueue to connectq\n", sockid);
+        stream_enqueue(mmt->destroyq, cur);
+        errno = EAGAIN;
+        return -1;
+    }
+
+    /* if nonblocking socket, return EINPROCESS */
+    if (sk->opts & NON_BLOCK) {
+        errno = EINPROCESS;
+        return -1;
+    } else {
+        while(1) {
+            if (!cur) {
+                fprintf(stderr, 
+                    "stream destroyed.\n");
+                errno = ETIMEOUT;
+            }
+            if (cur->state > TCP_ESTABLISHED) {
+                fprintf(stderr, 
+                    "Socket id %d, weird state\n", sockid);
+                /* TODO: how to handle this */
+                errno = ENOSYS;
+                return -1;
+            }
+            if (cur->state == TCP_ESTABLISHED) {
+                break;
+            }
+            usleep(1000);
+        }
+    }
+
+    return 0;
+}
+
+
+/* close stream close */
+inline int 
+close_stream_socket(int cpu_id, int sockid)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    socket_map_t      sk;
+    tcp_stream_t      cur;
+    int               ret;
+
+    if (!mmt) {
+        return -1;
+    } 
+
+    cur = mmt->socketq[sockid].stream;
+    if (!cur) {
+        fprintf(stderr, 
+            "Socket id %d, does not exist\n", sockid);
+        errno = ENOTCONN;
+        return -1;
+    }
+
+    if (cur->closed) {
+        fprintf(stderr, 
+            "Socket id %d, already closed stream\n", sockid);
+        return 0;
+    }
+    cur->closed = TRUE;
+
+    cur->sk = NULL;
+    
+    if (cur->state == TCP_CLOSE) {
+        stream_enqueue(mmt->destroyq, cur);
+        mmt->wakeup_flag = TRUE;
+        return 0;
+    } else if (cur->state == TCP_SYN_SENT) {
+        stream_enqueue(mmt->destroyq, cur);
+        mmt->wakeup_flag = TRUE;
+        return -1;
+    } else if (cur->state != TCP_ESTABLISHED && 
+        cur->state != TCP_CLOSE_WAIT) {
+        fprintf(stderr, 
+            "stream id %d at state %d\n", cur->id, cur->state);
+        errno = EBADF;
+        return -1;
+    }
+
+    cur->snd_var->on_closeq = TRUE;
+    ret = stream_queue(mmt->closeq, cur);
+    mmt->wakeup_flag = TRUE;
+    if (ret < 0) {
+        fprintf(stderr, 
+            "Faield to enqueue the stream to close.\n");
+        errno = EAGAIN;
+        return -1;
+    }
+
+    return 0;
+}
+
+
+/* close listening socket */
+inline int 
+close_listening_socket(int cpu_id, int sockid)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    tcp_listener_t    listener;
+
+    if (!mmt) {
+        return -1;
+    }
+
+    listener = mmt->socketq[sockid].listener;
+    if (!listener) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (listener->acceptq) {
+        destroy_stream_queue(mmt->acceptq);
+        listener->acceptq = NULL;
+    }
+
+    pthread_mutex_lock(&listener->accept_lock);
+    pthread_cond_signal(&listener->accept_cond);
+    pthread_mutex_unlock(&listener->accept_lock);
+
+    pthread_cond_destroy(&listener->accept_cond);
+    pthread_mutex_destroy(&listener->accept_lock);
+
+    free(listener);
+    mmt->socketq[sockid].listener = NULL;
 
     return 0;
 }

@@ -111,16 +111,44 @@ int
 mmutcpd_setsock_nonblock(int cpu_id, int sockid);
 
 /* socket ioctl */
+int 
 mmutcpd_socket_ioctl(int cpu_id, int sockid, int request, void *argp);
 
 /* create a socket */
+int 
 mmutcpd_socket(int cpu_id, int domain, int type, int protocol);
 
 /* socket bind */
+int 
 mmutcpd_bind(int cpu_id, int sockid, const struct sockaddr *addr, 
     socklen_t addrlen);
 
 /* socket listen */
+int 
 mmutcpd_listen(int cpu_id, int sockid, int backlog);
+
+/* socket accept */
+int 
+mmutcpd_accept(int cpu_id, int sockid, struct sockaddr *addr, 
+    socklen_t *addrlen);
+
+/* TODO: init rss */
+/* TODO: get_rss_cpu_core */
+int 
+get_rss_cpu_core(in_addr_t sip, in_addr_t dip, in_port_t sp, 
+    in_port_t dp, int num_queues);
+
+/* socket connect */
+int 
+mmutcpd_connect(int cpu_id, int sockid, const struct sockaddr *addr, 
+    socklen_t addrlen);
+
+/* close stream close */
+inline int 
+close_stream_socket(int cpu_id, int sockid);
+
+/* close listening socket */
+inline int 
+close_listening_socket(int cpu_id, int sockid);
 
 #endif /* __SOCKET_H_ */
