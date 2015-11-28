@@ -163,4 +163,24 @@ mmutcpd_abort(int cpu_id, int sockid);
 int 
 mmutcpd_read(int cpu_id, int sockid, char *buf, int len);
 
+/* readv socket */
+int 
+mmutcpd_readv(int cpu_id, int sockid, struct iovec *iov, int iov_num);
+
+/* copy data to app */
+inline int 
+cp_to_app(int cpu_id, tcp_stream_t cur, char *buf, int len);
+
+/* write socket */
+int 
+mmutcpd_write(int cpu_id, int sockid, char *buf, int len);
+
+/* writev socket */
+int 
+mmutcpd_writev(int cpu_id, int sockid, struct iovec *iov, int iov_num);
+
+/* copy data from app */
+inline int 
+cp_from_app(int cpu_id, tcp_stream_t cur, char *buf, int len);
+
 #endif /* __SOCKET_H_ */
