@@ -65,12 +65,12 @@ allocate_socket(int cpu_id, int socktype, int needlock)
     skq->num_sockets++;
 
     sk = &skq[skq->end];
-    sk.id = skq->end;
-    sk.socktype = socktype;
-    sk.opts = 0;
-    sk.valid = 1;
-    sk.epoll = 0;
-    sk.events = 0;
+    sk->id = skq->end;
+    sk->socktype = socktype;
+    sk->opts = 0;
+    sk->valid = 1;
+    sk->epoll = 0;
+    sk->events = 0;
     memset(&sk->ep_data, 0, sizeof(epoll_data_t));
 
     pthread_mutex_unlock(&skq->socketq_lock);
@@ -441,8 +441,8 @@ mmutcpd_bind(int cpu_id, int sockid, const struct sockaddr *addr,
     /* TODO: check whether the address is in use */
 
     addr_in = (struct sockaddr_in*)addr;
-    sk.saddr = *addr_in;
-    sk.opts |= ADDR_BIND;
+    sk->saddr = *addr_in;
+    sk->opts |= ADDR_BIND;
 
     return 0;
 }
@@ -476,7 +476,7 @@ mmutcpd_listen(int cpu_id, int sockid, int backlog)
     }
 
     if (sk->socktype == SOCK_STREAM) {
-        sk.socktype = SOCK_LISTENER;
+        sk->socktype = SOCK_LISTENER;
     }
 
     if (sk->socktype != SOCK_LISTENER) {
@@ -517,7 +517,7 @@ mmutcpd_listen(int cpu_id, int sockid, int backlog)
         return -1;
     }
 
-    sk.listener = listener;
+    sk->listener = listener;
     mmt->listener = listener;
 
     return 0;
@@ -556,7 +556,7 @@ mmutcpd_accept(int cpu_id, int sockid, struct sockaddr *addr,
         return -1;
     }
 
-    listener = sk.listener;
+    listener = sk->listener;
 
     /* try to directly get the first item of accept queue without lock */
     /* if get nothing, require lock and wait */
@@ -863,4 +863,231 @@ close_listening_socket(int cpu_id, int sockid)
     mmt->socketq[sockid].listener = NULL;
 
     return 0;
+}
+
+
+/* close socket */
+int 
+mmutcpd_close(int cpu_id, int sockid)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    socket_map_t      sk;
+    int               ret;
+
+    if (!mmt) {
+        return -1;
+    }
+
+    if (sockid < 0 || sockid >= m_config.max_concurrency) {
+        fprintf(stderr, 
+            "Socket id %d out of range.\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    sk = &mmt->socketq[sockid];
+    if (sk->socktype == SOCK_UNUSED) {
+        fprintf(stderr, 
+            "Invalid socket id %d\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    switch (sk->socktype) {
+        case SOCK_STREAM:
+            ret = close_stream_socket(cpu_id, sockid);
+            break;
+        
+        case SOCK_LISTENER:
+            ret = close_listening_socket(cpu_id, sockid);
+            break;
+        
+        case SOCK_EPOLL:
+            ret = mmutcpd_epoll_close(cpu_id, sockid);
+            break;
+        
+        /* TODO PIPE*/
+       
+        default:
+            errno = EINVAL;
+            ret = 1;
+            break;
+    }
+
+    free_socket(cpu_id, sockid, FALSE);
+
+    return ret;
+}
+
+
+/* abort socket */
+int 
+mmutcpd_abort(int cpu_id, int sockid)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    socket_map_t      sk;
+    tcp_stream_t      cur;
+    int               ret;
+
+    if (!mmt) {
+        return -1;
+    }
+
+    if (sockid < 0 || sockid >= m_config.max_concurrency) {
+        fprintf(stderr, 
+            "Socket id %d out of range.\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    sk = &mmt->socketq[sockid];
+    if (sk->socktype == SOCK_UNUSED) {
+        fprintf(stderr, 
+            "Invalid socket id %d\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    if (sk->socktype != SOCK_STREAM) {
+        fprintf(stderr, 
+            "Socket id %d is not a stream socket\n", sockid);
+        errno = ENOTSCOK;
+        return -1;
+    }
+
+    cur = sk->stream;
+    if (!cur) {
+        fprintf(stderr, 
+            "Socket id %d, stream does not exist.\n", sockid);
+        errno = ENOTCONN;
+        return -1;
+    }
+
+    free_socket(cpu_id, socket_id, FALSE);
+    cur->sk = NULL;
+
+    if (cur->state == TCP_CLOSE) {
+        fprintf(stderr, 
+            "Socket id %d, stream connection already reset\n", sockid);
+        return ERROR;
+    } else if (cur->state == TCP_SYN_SENT) {
+        /* TODO: this should notify event failure to all previous
+         * read() or write() calls  */
+        cur->state = TCP_CLOSE;
+        cur->close_reason = TCP_ACTIVE_CLOSE;
+        stream_queue(mmt->destroyq)
+        mmt->wakeup_flag = TRUE;
+        return 0;
+    } else if (cur->state == TCP_CLOSING ||
+        cur->state == TCP_LAST_ACK ||
+        cur->state == TCP_TIME_WAIT) {
+        cur->state = TCP_CLOSE;
+        cur->close_reason = TCP_ACTIVE_CLOSE;
+        stream_enqueue(mmt->destroyq);
+        mmt->wakeup_flag = TRUE;
+        return 0;
+    }
+
+    /* the stream strcuture will be destroyed after sending RST */
+    if (cur->snd_var->on_resetq) {
+        fprintf(stderr, 
+            "Socket id %d, stream call mmutcpd_abort "
+            "when in reset queue", sockid);
+        errno = ECONNRESET;
+        return -1;
+    }
+
+    cur->snd_var->on_resetq = TRUE;
+    ret = stream_queue(mmt->resetq, cur);
+    mmt->wakeup_flag = TRUE;
+
+    if (ret < 0) {
+        fprintf(stderr, 
+            "Failed to enqueue the stream to clsoe\n");
+        errno = EAGAIN;
+        return -1;
+    }
+
+    return 0;
+}
+
+
+/* read socket */
+int 
+mmutcpd_read(int cpu_id, int sockid, char *buf, int len)
+{
+    mmutcpd_manager_t mmt = g_mmutcpd[cpu_id];
+    socket_map_t      sk;
+    tcp_stream_t      cur;
+    tcp_recv_vars_t   rv;
+    int               event_remaining;
+    int               ret;
+
+    if (!mmt) {
+        return -1;
+    }
+
+    if (sockid < 0 || sockid >= m_config.max_concurrency) {
+        fprintf(stderr, 
+            "Socket id %d out of range.\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    sk = &mmt->socketq[sockid];
+    if (sk->socktype == SOCK_UNUSED) {
+        fprintf(stderr, 
+            "Invalid socket id %d\n", sockid);
+        errno = EBADF;
+        return -1;
+    }
+
+    /* TODO: PIPE */
+
+    if (sk->socktype != SOCK_STREAM) {
+        fprintf(stderr, 
+            "Socket id %d is not a stream socket\n", sockid);
+        errno = ENOTSCOK;
+        return -1;
+    }
+
+    /* stream's state should be ESTABLISHED, FIN_WAIT_1, 
+     * FIN_WAIT_2, CLOSE_WAIT */
+    cur = sk->stream;
+    /* TODO: change the state list, becasue the value related to it */
+    if (!cur || !(cur->state >= TCP_CLOSE_WAIT && 
+        cur->state <= TCP_CLOSE_WAIT)) {
+        errno = ENOTCONN;
+        return -1;
+    }
+
+    rv = cur->rcv_var;
+    pthread_spin_lock(&rv->read_lock);
+    ret = cp_to_app(cpu_id, cur, buf, len);
+
+    event_remaining = FALSE;
+    /* if there are remaining payload, generate EPOLL_IN,
+     * may because the user buffer is insufficient */
+    if (sk->epoll & EPOLL_IN) {
+        if (!(sk->epoll & EPOLL_ET) && rv->rcvbuf->merged_len > 0) {
+            event_remaining = TRUE;
+        }
+    }
+
+    /* if waiting for close, notify it if no remaing data */
+    if (cur->state == TCP_CLOSE_WAIT && 
+        rv->rcvbuf->merged_len == 0 && ret > 0) {
+        event_remaining = TRUE;
+    }
+
+    pthread_spin_unlock(&rv->read_lock);
+
+    if (event_remaining) {
+        if (sk->epoll) {
+            add_epoll_event(mmt->ep, USR_SHADOW_EVENT_QUEUE, 
+                sk, EPOLL_IN);
+        }
+    }
+
+    return ret;
 }

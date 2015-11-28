@@ -151,4 +151,16 @@ close_stream_socket(int cpu_id, int sockid);
 inline int 
 close_listening_socket(int cpu_id, int sockid);
 
+/* close socket */
+int 
+mmutcpd_close(int cpu_id, int sockid);
+
+/* abort socket */
+int 
+mmutcpd_abort(int cpu_id, int sockid);
+
+/* read socket */
+int 
+mmutcpd_read(int cpu_id, int sockid, char *buf, int len);
+
 #endif /* __SOCKET_H_ */
