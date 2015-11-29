@@ -10,13 +10,13 @@
 
 enum tcp_state
 {
-    TCP_ESTABLISHED = 1,
+    TCP_CLOSE = 0,
+    TCP_ESTABLISHED,
     TCP_SYN_SENT,
     TCP_SYN_RECV,
     TCP_FIN_WAIT1,
     TCP_FIN_WAIT2,
     TCP_TIME_WAIT,
-    TCP_CLOSE,
     TCP_CLOSE_WAIT,
     TCP_LAST_ACK,
     TCP_LISTEN,
@@ -46,6 +46,9 @@ struct sack_entry
     uint32_t expire;
 };
 #endif /* TCP_OPT_SACK_ENABLED */
+
+typedef struct tcp_ring_buffer * tcp_ring_buffer_t;
+typedef struct tcp_send_buffer * tcp_send_buffer_t;
 
 struct tcp_recv_vars
 {
@@ -91,6 +94,11 @@ struct tcp_recv_vars
 
 };
 typedef struct tcp_recv_vars * tcp_recv_vars_t;
+
+#define TCP_DEFAULT_MSS 1460
+#define TCP_DEFAULT_WSCALE 7
+#define TCP_MAXSEQ 0xffffffff
+#define TCP_INIT_WINDOW 14600
 
 struct tcp_send_vars
 {
@@ -163,6 +171,8 @@ typedef struct tcp_send_vars * tcp_send_vars_t;
 
 struct tcp_stream
 {
+    socket_map_t sk;
+
     /* identity */
     uint32_t id:24,
              stream_type:8;
@@ -174,6 +184,15 @@ struct tcp_stream
     
     /* tcp state */
     uint8_t  state;
+    uint8_t  close_reason;
+
+    uint8_t  closed;
+    uint8_t  is_bound_addr;
+    uint8_t  need_wnd_adv;
+    
+    uint8_t  on_hash_table;
+    uint8_t  on_rto_idx;
+    uint8_t  on_timewait_list;
     
     /* send/recv next */
     uint32_t snd_nxt;
@@ -191,5 +210,107 @@ struct tcp_stream
 };
 
 typedef struct tcp_stream * tcp_stream_t;
+
+#if 1
+/* basic stream function */
+/* create tcp stream */
+tcp_stream_t
+create_tcp_stream(mmutcpd_manager_t mmt, socket_map_t sk, int type, 
+    uint32_t saddr, uint16_t sport, uint32_t daddr, uint16_t dport);
+
+/* destroy the tcp stream */
+void 
+destroy_tcp_stream(mmutcpd_manager_t mmt, tcp_stream_t stream);
+
+/* dump stream */
+void 
+dump_stream(mmutcpd_manager_t mmt, tcp_stream_t stream);
+#endif /* basic stream function */
+
+#if 1
+/* structure for tcp_stream identify */
+#define SHASH_ENTRY 249997
+
+struct hash_bucket_head
+{
+    tcp_stream_t tqh_first;
+    tcp_stream_t *tqh_last;
+}; 
+typedef struct hash_bucket_head hash_bucket_head;
+
+/* tcp_flow_hashtable structure */
+struct tcp_flow_hashtable
+{
+    uint8_t ht_count;  /* count for # entry */
+    hash_bucket_head ht_table[SHASH_ENTRY];
+};
+typedef struct tcp_flow_hashtable * tcp_flow_hashtable_t;
+
+#endif /* end for structure fot tcp_stram identify */
+
+/* create stream queue */
+tcp_stream_t
+create_stream_queue(int size);
+
+/* dequeue from the queue */
+tcp_stream_t
+stream_dequeue(stream_queue_t sq);
+
+/* enqueue from the queue */
+int
+stream_enqueue(stream_queue_t sq, tcp_stream_t cur);
+
+
+#if 1
+/* functions for tcp_stream hash identify */
+/* create a tcp_flow_hashtable */
+tcp_flow_hashtable_t 
+create_tcp_flow_hashtable();
+
+/* hash of a tcp stream flow */
+uint32_t
+hash_of_stream(const tcp_stream_t item);
+
+/* two tcp_stream equal */
+inline int 
+stream_is_equal(const tcp_stream_t s1, const tcp_stream_t s2);
+
+/* destroy the tcp_flow_hashtable */
+void 
+destroy_tcp_flow_hashtable(tcp_flow_hashtable_t ht);
+
+/* insert a tcp_stream into the tcp_flow_hashtable */
+int 
+insert_tcp_flow_hashtable(tcp_flow_hashtable_t ht, tcp_stream_t item);
+
+/* remove the tcp_stream from the tcp_flow_hashtable */
+void*
+remove_tcp_flow_hashtable(tcp_flow_hashtable_t, tcp_stream_t item);
+
+/* search the tcp_stream from the tcp_flow_hashtable */
+tcp_stream_t
+search_tcp_flow_hashtable(tcp_flow_hashtable_t ht, const tcp_stream_t item);
+
+#endif /* functions for tcp_stream hash identify */
+
+#if 1
+/* event in stream */
+/* raise read event  */
+inline void 
+raise_read_event(mmutcpd_manager_t mmt, tcp_stream_t stream);
+
+/* raise write event  */
+inline void 
+raise_write_event(mmutcpd_manager_t mmt, tcp_stream_t stream);
+
+/* raise close event  */
+inline void 
+raise_close_event(mmutcpd_manager_t mmt, tcp_stream_t stream);
+
+/* raise error event  */
+inline void 
+raise_error_event(mmutcpd_manager_t mmt, tcp_stream_t stream);
+
+#endif /* event in stream */
 
 #endif /* __STREAM_H_ */
