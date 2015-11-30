@@ -7,37 +7,6 @@
 #include <sys/queue.h>
 #include "config.h"
 
-
-enum tcp_state
-{
-    TCP_CLOSE = 0,
-    TCP_ESTABLISHED,
-    TCP_SYN_SENT,
-    TCP_SYN_RECV,
-    TCP_FIN_WAIT1,
-    TCP_FIN_WAIT2,
-    TCP_TIME_WAIT,
-    TCP_CLOSE_WAIT,
-    TCP_LAST_ACK,
-    TCP_LISTEN,
-    TCP_CLOSING,    /* Now a valid a state */
-
-    TCP_MAX_STATES  /* Leave at the end! */
-};
-
-enum tcp_close_reason
-{
-    TCP_NOT_CLOSED = 0,
-    TCP_ACTIVE_CLOSE,
-    TCP_PASSIVE_CLOSE,
-    TCP_CONN_FAIL,
-    TCP_CONN_LOST,
-    TCP_RESET,
-    TCP_NO_MEM,
-    TCP_NOT_ACCEPTED,
-    TCP_TIMEOUT
-};
-
 #if TCP_OPT_SACK_ENABLED
 struct sack_entry
 {
@@ -95,10 +64,7 @@ struct tcp_recv_vars
 };
 typedef struct tcp_recv_vars * tcp_recv_vars_t;
 
-#define TCP_DEFAULT_MSS 1460
-#define TCP_DEFAULT_WSCALE 7
-#define TCP_MAXSEQ 0xffffffff
-#define TCP_INIT_WINDOW 14600
+
 
 struct tcp_send_vars
 {
@@ -197,6 +163,9 @@ struct tcp_stream
     /* send/recv next */
     uint32_t snd_nxt;
     uint32_t rev_nxt;
+
+    /* last active timestamp */
+    uint32_t last_active_ts;
     
     /* send side vars */
     struct tcp_send_vars *snd_var;

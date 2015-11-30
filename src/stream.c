@@ -1,35 +1,5 @@
 #include "stream.h"
 
-char *tcp_state_str[] =
-{
-    "TCP_CLOSE",
-    "TCP_ESTABLISHED",
-    "TCP_SYN_SENT",
-    "TCP_SYN_RECV",
-    "TCP_FIN_WAIT1",
-    "TCP_FIN_WAIT2",
-    "TCP_TIME_WAIT",
-    "TCP_CLOSE_WAIT",
-    "TCP_LAST_ACK",
-    "TCP_LISTEN",
-    "TCP_CLOSING",    /* Now a valid a state */
-
-    "TCP_MAX_STATES"  /* Leave at the end! */
-};
-
-char *tcp_close_reason_str[] =
-{
-    "TCP_NOT_CLOSED",
-    "TCP_ACTIVE_CLOSE",
-    "TCP_PASSIVE_CLOSE",
-    "TCP_CONN_FAIL",
-    "TCP_CONN_LOST",
-    "TCP_RESET",
-    "TCP_NO_MEM",
-    "TCP_NOT_ACCEPTED",
-    "TCP_TIMEOUT"
-};
-
 #if 1
 /* basic stream function */
 /* create tcp stream */
@@ -115,7 +85,7 @@ create_tcp_stream(mmutcpd_manager_t mmt, socket_map_t sk, int type,
     stream->rcv_var->rcv_wnd = TCP_INIT_WINDOW;
 
     stream->rcv_var->snd_wl1 = stream->rcv_var->irs - 1;
-    stream->rcv_var->rto = TCP_INIT_RTO;
+    stream->rcv_var->rto = TCP_INIT_RTO_VAL;
 
     /* use spin lock */
     if (pthread_spin_init(&stream->rcv_var->read_lock, 
