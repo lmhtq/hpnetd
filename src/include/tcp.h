@@ -194,40 +194,40 @@ get_sender(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* add to control list */
 inline void 
-add_to_control_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+add_to_control_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* add to send list */
 inline void
-add_to_send_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+add_to_send_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* add to ack list */
 inline void 
-add_to_ack_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
-
-/* add to rto list */
-inline void 
-add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+add_to_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* enqueue ack, this maybe a import position to change */
 inline void 
 enqueue_ack(mmutcpd_manager_t mmt, tcp_stream_t cur, 
     uint32_t cur_ts, uint8_t opt);
 
-/* update timeout list */
-inline void 
-update_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
-
 /* remove from control list */
 inline void 
-remove_from_control_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+remove_from_control_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* remove from send list */
 inline void
-remove_from_send_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+remove_from_send_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* remove from ack list */
 inline void
-remove_from_ack_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+remove_from_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+
+/* add to rto list */
+inline void 
+add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+
+/* update timeout list */
+inline void 
+update_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* remove from rto list */
 inline void

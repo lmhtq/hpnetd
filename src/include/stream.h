@@ -100,7 +100,7 @@ struct tcp_send_vars
     uint8_t  is_wack:1,       /* is ack for window adertisement? */
              ack_cnt:6;       /* num of acks to send. max 64 */
 
-    uint8_t  on_ctrl_list:1,
+    uint8_t  on_control_list:1,
              on_send_list:1,
              on_ack_list:1,
              on_sendq:1,
@@ -159,6 +159,8 @@ struct tcp_stream
     uint8_t  on_hash_table;
     uint8_t  on_rto_idx;
     uint8_t  on_timewait_list;
+    uint8_t  control_list_waiting;
+
     
     /* send/recv next */
     uint32_t snd_nxt;
