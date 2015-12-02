@@ -1,8 +1,6 @@
 #ifndef _TCP_H_
 #define _TCP_H_
 
-#if 1
-/* tcp_out */
 #define TCP_HEADER_LEN 20
 
 #define TCP_CALC_CHECKSUM     TRUE
@@ -134,6 +132,15 @@ enum tcp_option
     TCP_OPT_TIMESTAMP
 };
 
+struct tcp_timestamp 
+{
+    uint32_t ts_val;
+    uint32_t ts_ref;
+}
+typedef struct tcp_timestamp * tcp_timestamp_t;
+
+#if 1
+/* tcp_out */
 /* calcalute the length of the tcp option */
 inline uint16_t 
 calc_opt_length(uint8_t flags);
@@ -208,6 +215,130 @@ add_to_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 inline void 
 enqueue_ack(mmutcpd_manager_t mmt, tcp_stream_t cur, 
     uint32_t cur_ts, uint8_t opt);
+#endif /* tcp_out */
+
+#if 1
+/* tcp_in */
+/* filter SYN packet */
+inline int 
+filter_syn_packet(mmutcpd_manager_t mmt, uint32_t ip, uint16_t port);
+
+/* parse tcp options, mainly used in receive side */
+inline void 
+parse_tcp_options(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    uint8_t *tcpopt, int len);
+
+/* handle passive open */
+inline tcp_stream_t 
+handle_passive_open(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    const struct iphdr *iph, const struct tcphdr *tcph, uint32_t seq, 
+    uint16_t window);
+
+/* handle active open */
+inline tcp_stream_t 
+handle_active_open(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts, 
+    struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, uint16_t window);
+
+/* parse tcp timestamp */
+inline int 
+parse_tcp_timestamp(tcp_stream_t cur, tcp_timestamp_t ts, 
+    uint8_t *tcpopt, int len);
+
+/* validate sequence */
+/* return TRUE: the seq is right
+   return FALSE: the seq is wrong */
+inline int 
+validate_sequence(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts, 
+    struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, int payloadlen);
+
+/* notify signal "connection reset" to app */
+inline void 
+notify_conn_rest_to_app(mmutcpd_manager_t mmt, tcp_stream_t cur);
+
+/* process RST packet */
+inline int 
+process_rst(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t ack_seq);
+
+/* estimate the RTT value */
+inline void 
+estimate_rtt(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t mrtt);
+
+/* process ACK packet */
+inline void 
+process_ack(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts, 
+    struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, uint16_t window, 
+    int payloadlen);
+
+/* process tcp payload: merge tcp payload using receive ring buffer
+ * return TRUE: in normal case
+ * return FALSE: immediate ACK is required
+ * NOTE: only can be called at ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2 */
+inline int 
+process_tcp_payload(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts, 
+    uint8_t *payload, uint32_t seq, int payloadlen);
+
+/* create new flow hashtable entry */
+inline tcp_stream_t 
+create_new_flow_hashtable_entry(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    const struct iphdr *iph, int ip_len, const struct tcphdr *tcph, 
+    uint32_t seq, uint32_t ack_seq, int payloadlen, uint16_t window);
+
+/* handle tcp state listen */
+inline void 
+handle_tcp_state_listen(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph);
+
+/* handle tcp state syn sent */
+inline void 
+handle_tcp_state_syn_sent(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+tcp_stream_t cur, struct tcphdr *tcph);
+
+/* handle tcp state syn recv */
+inline void 
+handle_tcp_state_syn_recv(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t ack_seq);
+
+/* handle tcp state established */
+inline void 
+handle_tcp_state_established(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
+    uint8_t *payload, int payloadlen, uint16_t window);
+
+/* handle tcp state close wait */
+inline void 
+handle_tcp_state_close_wait(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
+    int payloadlen, uint16_t window);
+
+/* handle tcp state last ack(to ack FIN) */
+inline void 
+handle_tcp_state_last_ack(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    const struct iphdr *iph, int ip_len, tcp_stream_t cur, 
+    struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
+    int payloadlen, uint16_t window);
+
+/* handle tcp state fin_wait1 */
+inline void 
+handle_tcp_state_fin_wait1(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
+    uint8_t *payload, int payloadlen, uint16_t window);
+
+/* handle tcp state fin_wait2 */
+inline void 
+handle_tcp_state_fin_wait2(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
+    uint8_t *payload, int payloadlen, uint16_t window);
+
+/* handle tcp state closing */
+inline void 
+handle_tcp_state_closing(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
+    int payloadlen, uint16_t window);
+
+/* process tcp packet */
+int process_tcp_packet(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    const iphdr *iph, int ip_len);
+#endif /* tcp_in */
 
 /* remove from control list */
 inline void 
@@ -240,6 +371,13 @@ remove_from_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
 /* remove from timeout list */
 inline void
 remove_from_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
-#endif /* tcp_out */
+
+/* update retransmission timer */
+inline void
+update_rto_timer(tcp_stream_t cur, cur_ts);
+
+/* add to timewait list */
+include void 
+add_to_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts);
 
 #endif /* _TCP_H_ */

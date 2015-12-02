@@ -160,6 +160,8 @@ struct tcp_stream
     uint8_t  on_rto_idx;
     uint8_t  on_timewait_list;
     uint8_t  control_list_waiting;
+    uint8_t  sack_permit;   /* whether peer permits SACK */
+    uint8_t  saw_timestamp; /* whether peer sends timestamp */
 
     
     /* send/recv next */
