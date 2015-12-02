@@ -1053,21 +1053,320 @@ validate_sequence(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts,
 
 /* notify signal "connection reset" to app */
 inline void 
-notify_conn_rest_to_app(mmutcpd_manager_t mmt, tcp_stream_t cur);
+notify_conn_rest_to_app(mmutcpd_manager_t mmt, tcp_stream_t cur)
+{
+    /* TODO: signal to app */
+    fprintf(stderr, "Stream %d: notifying connection reset to app\n", cur->id);
+}
 
 /* process RST packet */
 inline int 
-process_rst(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t ack_seq);
+process_rst(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t ack_seq)
+{
+    /* TODO: reset validateion logic */
+    /* the seq of a RST should be in window (in SYN_SENT state, 
+     * should ack the previous SYN) */
+    fprintf(stderr, "stream %d(%s): tcp reset.\n", cur->id, 
+        tcp_state_str[cur->state]);
+
+    if (cur->state <= TCP_SYN_SENT) {
+        /* not handle here */
+        return FALSE;
+    }
+
+    if (cur->state == TCP_SYN_RECV) {
+        if (ack_seq == cur->rcv_nxt) {
+            cur->state = TCP_CLOSE;
+            cur->close_reason = TCP_RESET;
+            destroy_tcp_stream(mmt, cur);
+        }
+        return TRUE;
+    }
+
+    /* if the app is already  closed the conn, just destroy it */
+    if (cur->state == TCP_FIN_WAIT1 || cur->state == TCP_FIN_WAIT2 || 
+        cur->state == TCP_LAST_ACK || cur->state == TCP_CLOSING || 
+        cur->state == TCP_TIME_WAIT) {
+        cur->state = TCP_CLOSE;
+        cur->close_reason = TCP_ACTIVE_CLOSE;
+        destroy_tcp_stream(mmt, cur);
+        return TRUE;
+    }
+
+    if (cur->state >= TCP_ESTABLISHED && cur->state <= TCP_TIME_WAIT) {
+        /* ESTAB, FIN1, FIN2, CLOSE_WAIT */
+        /* TODO: flush all the segment queues */
+        //notify_conn_rest_to_app(mmt, cur);
+    }
+
+    if (!(cur->snd_var->on_closeq || cur->snd_var->on_closeq_int || 
+        cur->snd_var->on_resetq || cur->snd_var->on_resetq_int)) {
+        cur->state = TCP_CLOSE_WAIT;
+        cur->close_reason = TCP_RESET;
+        raise_close_event(mmt, cur);
+    }
+
+    return TRUE;
+}
 
 /* estimate the RTT value */
 inline void 
-estimate_rtt(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t mrtt);
+estimate_rtt(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t mrtt)
+{
+    /* be called by not retransmitted packets */
+    /* TODO: determine tcp_rto_min */
+#define TCP_RTO_MIN 0
+    long     m = mrtt;
+    uint32_t tcp_rto_min = TCP_RTO_MIN;
+    tcp_recv_vars_t rcv_var = cur->rcv_var;
+
+    if (m == 0) {
+        m = 1;
+    }
+
+    if (rcv_var->srtt != 0) {
+        /* rtt = 7/8 rtt + 1/8 new */ 
+        m -= (rcv_var->srtt >> 3);
+        rcv_var->srtt += m;
+        if (m < 0) {
+            m = -m;
+            m -= (rcv_var->mdev >> 2);
+            if (m > 0) {
+                m >>= 3;/* ??? */
+            }
+        } else {
+            m -= (rcv_var->mdev >> 2);
+        }
+        rcv_var->mdev += m;
+
+        if (rcv_var->mdev > rcv_var->mdev_max) {
+            rcv_var->mdev_max = rcv_var->mdev;
+            if (rcv_var->mdev_max > rcv_var->rttvar) {
+                rcv_var->rttvar = rcv_var->mdev_max;
+            }
+        }
+
+        if (TCP_SEQ_GT(cur->snd_var->snd_una, rcv_var->rtt_seq)) {
+            if (rcv_var->mdev_max < rcv_var->rttvar) {
+                rcv_var->rttvar -= (rcv_var->rttvar - rcv_var->mdev_max) >> 2;
+            }
+            rcv_var->rtt_seq = cur->snd_nxt;
+            rcv_var->mdev_max = tcp_rto_min;
+        }
+    } else {
+        /* fresh measurement */
+        rcv_var->srtt = m << 3;
+        rcv_var->mdev = m << 1;
+        rcv_var->mdev_max = rcv_var->rtttt = MAX(rcv_var->mdev, tcp_rto_min);
+        rcv_var->rtt_seq = cur->snd_nxt;
+    }
+
+    fprintf(stderr, "mrtt:%u(%uus), srtt:%u(%ums), mdev:%u, mdev_max:%u, "
+        "rttvar:%u, rtt_seq:%u\n", mrtt, TS_TO_USEC(mrtt), rcv_var->srtt, 
+        TS_TO_MSEC(rcv_var->srtt >> 3), rcv_var->mdev, rcv_var->mdev_max, 
+        rcv_var->rttvar, rcv_var->rtt_seq);
+}
 
 /* process ACK packet */
 inline void 
 process_ack(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts, 
     struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, uint16_t window, 
-    int payloadlen);
+    int payloadlen)
+{
+    tcp_send_vars_t snd_var = cur->snd_var;
+    tcp_recv_vars_t rcv_var = cur->rcv_var;
+    uint32_t        cwnd, cwnd_prev;
+    uint32_t        rmlen;
+    uint32_t        snd_wnd_prev;
+    uint32_t        right_wnd_edge;
+    uint8_t         dup;
+    int             ret;
+
+    cwnd = window;
+    if (!tcph->syn) {
+        cwnd = cwnd << snd_var->wscale;
+    }
+    right_wnd_edge = snd_var->peer_wnd + rcv_var->snd_wl2;
+
+    /* if ack overs the sending buffer, return */
+    if (cur->state == TCP_FIN_WAIT1 || cur->state == TCP_FIN_WAIT2 || 
+        cur->state == TCP_CLOSING || cur->state == TCP_CLOSE_WAIT || 
+        cur->state == TCP_LAST_ACK ) {
+        if (snd_var->is_fin_sent && ack_seq == snd_var->sndbuf->len) {
+            ack_seq--;
+        }
+    }
+
+    if (TCP_SEQ_GT(ack_seq, snd_var->sndbuf->head_seq + snd_var->sndbuf->len)) {
+        fprintf(stderr, "stream %d(%s): invalid ack. ack_seq:%u, "
+            "possible max_ack_seq:%u\n", cur->id, tcp_state_str[cur->state], 
+            ack_seq, snd_var->sndbuf->head_seq + snd_var->sndbuf->len);
+        return ;
+    }
+
+    /* update window */
+    if (TCP_SEQ_LEQ(rcv_var->snd_wl1, seq) && 
+        TCP_SEQ_LEQ(rcv_var->snd_wl2, ack_seq)) {
+        cwnd_prev = snd_var->peer_wnd;
+        snd_var->peer_wnd = cwnd;
+        rcv_var->snd_wl1 = seq;
+        rcv_var->snd_wl2 = ack_seq;
+
+        if (cwnd_prev < cur->snd_nxt - snd_var->snd_una && 
+            snd_var->peer_wnd >= cur->snd_nxt - snd_var->snd_una) {
+            fprintf(stderr, "stream %d:broadcasting client window update! "
+                "ack_seq:%u, peer_wnd:%u(before:%u), (snd_nxt-snd_una:%u)\n", 
+                cur->id, ack_seq, snd_var->peer_wnd, cwnd_prev, 
+                cur->snd_nxt - snd_var->snd_una);
+            raise_write_event(mmt, cur);
+        }
+    }
+
+    /* check dup ack count */
+    /* dup ack if 
+     * 1. ack_seq is old
+     * 2. payloadlen is 0
+     * 3. advertised window not changed
+     * 4. there is outstanding unacknowledged data
+     * 5. ack_seq == snd_una */
+    dup = FALSE;
+    if (TCP_SEQ_LT(ack_seq, cur->snd_nxt) && 
+        ack_seq == rcv_var->last_ack_seq && payloadlen == 0 && 
+        rcv_var->snd_wl2 + snd_var->peer_wnd == right_wnd_edge) {
+        rcv_var->dup_acks++;
+        dup = TRUE;
+    }
+    if (!dup) {
+        rcv_var->dup_acks = 0;
+        rcv_var->last_ack_seq = ack_seq;
+    }
+
+    /* fast retransmission */
+    if (dup && rcv_var->dup_acks == 3) {
+        fprintf(stderr, "stream %d: Triple dup acks! ack_seq:%u\n", 
+            cur->id, ack_seq);
+        if (TCP_SEQ_LT(ack_seq, cur->snd_nxt)) {
+            fprintf(stderr, "stream %d: reducing snd_nxt from %u to %u\n", 
+                cur->id, cur->snd_nxt, ack_seq);
+            if (ack_seq != snd_var->snd_una) {
+                fprintf(stderr, "stream %d: ack_seq and snd_una mismatch on "
+                    "triple dup acks.\n", cur->id, ack_seq, snd_var->snd_una);
+            }
+            cur->snd_nxt = ack_seq;
+        }
+
+        /* update congestion control variables */
+        /* ssthresh to half of min of cwnd and peer_wnd */
+        snd_var->ssthresh = MIN(snd_var->cwnd, snd_var->peer_wnd) >> 1;
+        snd_var->ssthresh = MAX(snd_var->ssthresh, snd_var->mss << 1);
+        snd_var->cwnd = snd_var->ssthresh + 3 * snd_var->mss;
+        fprintf(stderr, "stream %d: fast retransmission. "
+            "cwnd:%u, ssthresh:%u\n", cur->id, snd_var->cwnd, 
+            snd_var->ssthresh);
+
+        /* count number of retransmission */
+        if (snd_var->nrtx < TCP_MAX_RTX) {
+            snd_var->nrtx++;
+        } else {
+            fprintf(stderr, "stream %d: exceeds TCP_MAX_RTX\n", cur->id);
+        }
+
+        add_to_send_list(mmt, cur);
+    } else if (rcv_var->dup_acks > 3) {
+        /* inflate congestion window until before overflow */
+        if ( (uint32_t)(snd_var->cwnd + snd_var->mss) > snd_var->cwnd ) {
+            snd_var->cwnd += snd_var->mss;
+            fprintf(stderr, "stream %d: dup ack cwnd inflate. cwnd:%u, "
+                "ssthresh:%u\n", cur->id, snd_var->cwnd, snd_var->ssthresh);
+        }
+    }
+
+#if TCP_OPT_SACK_ENABLED
+    /* TODO: implement SACK */
+    //parse_sack_option
+#endif /* TCP_OPT_SACK_ENABLED */
+
+#if RECOVERY_AFTER_LOSS
+    /* updating snd_nxt (when recovered from loss) */
+    if (TCP_SEQ_GT(ack_seq, cur->snd_nxt)) {
+        fprintf(stderr, "stream %d:updating snd_nxt from %u to %u.\n", 
+            cur->snd_nxt, ack_seq);
+        cur->snd_nxt = ack_seq;
+        if (snd_var->sndbuf->len == 0) {
+            remove_from_send_list(mmt, cur);
+        }
+    }
+#endif /* RECOVERY_AFTER_LOSS */
+    
+    /* if ack_seq is previous acked, return */
+    if (TCP_SEQ_GEQ(snd_var->sndbuf->head_seq, ack_seq)) {
+        return;
+    }
+
+    /* TODO: ??? remove acked sequence from send buffer */
+    rmlen = ack_seq - snd_var->sndbuf->head_seq;
+    if (rmlen > 0) {
+        /* routine goes here only if there is new payload (not retransmitted) */
+        uint16_t packets;
+        
+        /* if acks new data */
+        packets = rmlen / snd_var->eff_mss;
+        if ((rmlen / snd_var->eff_mss) * snd_var->eff_mss > rmlen ) {
+            packets++;
+        }
+
+        /* estimate rtt and calc rto */
+        if (cur->saw_timestamp) {
+            estimate_rtt(mmt, cur, cur_ts - rcv_var->ts_last_ack_rcv);
+            snd_var->rto = (rcv_var->srtt >> 3) + rcv_var->rttvar;
+        } else {
+            /* TODO: implement no timestamp estimate */
+
+        }
+
+        /* update congestion variables */
+        if (cur->state >= TCP_ESTABLISHED) {
+            if (snd_var->cwnd < snd_var->ssthresh) {
+                if (snd_var->cwnd + snd_var->mss * packets > snd_var->cwnd) {
+                    snd_var->cwnd += snd_var->mss * packets;
+                }
+                fprintf(stderr, "stream %d:slow start, cwnd:%u, ssthresh:%u\n", 
+                    cur->id, snd_var->cwnd, snd_var->ssthresh);
+            } else {
+                uint32_t new_cwnd = snd_var->cwnd + packets * 
+                snd_var->mss * snd_var->mss / snd_var->cwnd;
+                if (new_cwnd > snd_var->cwnd) {
+                    snd_var->cwnd = new_cwnd;
+                }
+                fprintf(stderr, "stream %d: congestion avoidance cwnd:%u, "
+                    "ssthresh:%u\n", snd_var->cwnd, snd_var->ssthresh);
+            }
+        }
+
+        if (pthread_spin_lock(&snd_var->write_lock)) {
+            if (errno == EDEADLK) {
+                fprintf(stderr, 
+                    "stream %d:dead lock in process_ack\n", cur->id);
+            }
+            assert(0);
+        }
+
+        /* remove buffer */
+        ret =sb_remove(mmt->rbm_snd, snd_var->sndbuf, rmlen);
+        snd_var->snd_una = ack_seq;
+        snd_wnd_prev = snd_var->snd_wnd;
+        snd_var->snd_wnd = snd_var->sndbuf->size - snd_var->sndbuf->len;
+
+        /* if there was no available sending window, 
+         * notify newly avaliable window to app */
+        raise_write_event(mmt, cur);
+
+        pthread_spin_unlock(&snd_var->write_lock);
+
+        update_rto_timer(mmt, cur, cur_ts);
+    }
+
+}
 
 /* process tcp payload: merge tcp payload using receive ring buffer
  * return TRUE: in normal case
@@ -1075,59 +1374,473 @@ process_ack(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts,
  * NOTE: only can be called at ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2 */
 inline int 
 process_tcp_payload(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts, 
-    uint8_t *payload, uint32_t seq, int payloadlen);
+    uint8_t *payload, uint32_t seq, int payloadlen)
+{
+    tcp_recv_vars_t rcv_var = cur->rcv_var;
+    tcp_send_vars_t snd_var = cur->snd_var;
+    uint32_t        prev_rcv_nxt;
+    int             ret;
+
+    /* if seq and segment length is lower than rcv_nxt, ignore and send ack */
+    if (TCP_SEQ_LT(seq + payloadlen, cur->rcv_nxt)) {
+        return FALSE;
+    }
+
+    /* if payload exceeds receiving buffer, drop and send ack */
+    if (TCP_SEQ_GT(seq + payloadlen, cur->rcv_nxt + rcv_var->rcv_wnd)) {
+        return FALSE;
+    }
+
+    /* allocate reveive buffer if not exist */
+    if (!rcv_var->rcvbuf) {
+        rcv_var->rcvbuf = rb_init(mmt->rbm_rcv, rcv_var->irs + 1);
+        if (!rcv_var->rcvbuf) {
+            fprintf(stderr, 
+                "stream %d: failed to allocate receive buffer.\n", cur->id);
+            cur->state = TCP_CLOSE;
+            cur->close_reason = TCP_NO_MEM;
+            raise_error_event(mmt, cur);
+
+            return ERROR;
+        }
+    }
+
+    if (pthread_spin_lock(&rcv_var->read_lock)) {
+        if (errno == EDEADLK) {
+            fprintf(stderr, 
+                "stream %d: dead lock in process_tcp_payload.\n", cur->id);
+        }
+        assert(0);    
+    }
+
+    prev_rcv_nxt = cur->rcv_nxt;
+    ret = rb_put(mmt->rbm_rcv, rcv_var->rcvbuf, 
+        payload, (uint32_t)payloadlen, seq);
+    if (ret < 0) {
+        fprintf(stderr, "stream %d:cant merge payload. reason:%d.\n", 
+            cur->id, ret);
+
+    }
+
+    /* discard the buffer if the state is FIN_WAIT1|FIN_WAIT2, 
+     * meaning that the connection is already closed by the app */
+    if (cur->state == TCP_FIN_WAIT1 || cur->state == TCP_FIN_WAIT2) {
+        rb_remove(mmt->rbm_rcv, rcv_var->rcvbuf, 
+            rcv_var->rcvbuf->merged_len, AT_MMUTCPD);
+    }
+    cur->rcv_nxt = rcv_var->rcv_buf->head_seq + rcv_var->rcvbuf->merged_len;
+    rcv_var->rcv_wnd = rcv_var->rcvbuf->size - 1 - rcv_var->rcv_buf->last_len;
+
+    pthread_spin_unlock(&rcv_var->read_lock);
+
+    if (TCP_SEQ_LEQ(cur->rcv_nxt, prev_rcv_nxt)) {
+        /* there are some lost packets */
+        return FALSE;
+    }
+
+    fprintf(stderr, "stream %d: data arrived. len:%d, ET:%u, IN:%u, OUT:%u\n", 
+        cur->id, payloadlen, cur->sk ? cur->sk->epoll & EPOLL_ET : 0, 
+        cur->sk ? cur->sk->epoll & EPOLL_IN : 0, 
+        cur->sk ? cur->sk->epoll & EPOLL_OUT : 0);
+
+    if (cur->state == TCP_ESTABLISHED) {
+        raise_read_event(mmt, cur);
+    }
+
+    return TRUE;
+}
 
 /* create new flow hashtable entry */
 inline tcp_stream_t 
 create_new_flow_hashtable_entry(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     const struct iphdr *iph, int ip_len, const struct tcphdr *tcph, 
-    uint32_t seq, uint32_t ack_seq, int payloadlen, uint16_t window);
+    uint32_t seq, uint32_t ack_seq, int payloadlen, uint16_t window)
+{
+    tcp_stream_t cur;
+    int          ret;
+
+    if (tcph->syn && !tcph->ack) {
+        /* handle the SYN */
+        ret = filter_syn_packet(mmt, iph->daddr, tcph->dest);
+        if (!ret) {
+            fprintf(stderr, "refusing SYN packet.\n");
+            send_tcp_packet_standalone(mmt, iph->daddr, tcph->dest, 
+                iph->saddr, tcph->source, 0, seq + payloadlen + 1, 0, 
+                TCP_FLAG_RST | TCP_FLAG_ACK, NULL, 0, cur_ts, 0);
+            return NULL;
+        }
+
+        /* now accept the new connection */
+        cur = handle_passive_open(mmt, cur_ts, iph, tcph, seq, window);
+        if (!cur) {
+            fprintf(stderr, "No available space in flow pool.\n");
+            send_tcp_packet_standalone(mmt, iph->daddr, tcph->dest, 
+                iph->saddr, tcph->source, 0, seq + payloadlen + 1, 0, 
+                TCP_FLAG_RST | TCP_FLAG_ACK, NULL, 0, cur_ts, 0);
+            return NULL;
+        }
+
+        return cur;
+    } else if (tcph->rst) {
+        fprintf(stderr, "RST packet come in.\n");
+        /* for the reset packet, just discard */
+        return NULL;
+    } else {
+        fprintf(stderr, "weird packet come in\n");
+        /* TODO: for else, discard and send a RST */
+        /* if the ACK bit is off, response with seq 0 :<seq=0><ack=seg.seq+seg.len><ctrl=rst|ack>
+         * if the ACK bit is on,                      :<seq=seg.ack><ctrl=rst>*/
+        if (tcph->ack) {
+            send_tcp_packet_standalone(mmt, iph->daddr, tcph->dest, iph->saddr,
+                tcph->source, ack_seq, 0, 0, TCP_FLAG_RST, NULL, 0, cur_ts, 0);
+        } else {
+            send_tcp_packet_standalone(mmt, iph->daddr, tcph->dest, iph->saddr,
+                tcph->source, 0, seq + payloadlen, 0, TCP_FLAG_RST, 
+                NULL, 0, cur_ts, 0);
+        }
+
+        return NULL;
+    }
+}
 
 /* handle tcp state listen */
 inline void 
 handle_tcp_state_listen(mmutcpd_manager_t mmt, uint32_t cur_ts, 
-    tcp_stream_t cur, struct tcphdr *tcph);
+    tcp_stream_t cur, struct tcphdr *tcph)
+{
+    if (tcph->syn) {
+        cur->state = TCP_SYN_RECV;
+        cur->rcv_nxt++;
+        fprintf(stderr, "stream %d: TCP_SYN_RECV\n", cur->id);
+        add_to_control_list(mmt, cur, cur_ts);
+    } else {
+        fprintf(stderr, "stream %d(%s): packet without SYN.\n", 
+            cur->id, tcp_state_str[cur->state]);
+    }
+}
 
 /* handle tcp state syn sent */
+/* active open */
 inline void 
 handle_tcp_state_syn_sent(mmutcpd_manager_t mmt, uint32_t cur_ts, 
-tcp_stream_t cur, struct tcphdr *tcph);
+tcp_stream_t cur, struct tcphdr *tcph)
+{
+    int ret;
+    /* when active open */
+    if (tcph->ack) {
+        /* filter the unacceptable acks */
+        if (TCP_SEQ_LEQ(ack_seq, cur->snd_var->iss) || 
+            TCP_SEQ_GT(ack_seq, cur->snd_nxt)) {
+            if (!tcph->rst) {
+                send_tcp_packet_standalone(mmt, iph->daddr, tcph->dest, 
+                    iph->saddr, tcph->source, ack_seq, 0, 0, TCP_FLAG_RST, 
+                    NULL, 0, cur_ts, 0);
+            }
+            return;
+        }
+        /* accept the ack */
+        cur->snd_var->snd_una++;
+    } 
+
+    if (tcph->rst) {
+        if (tcph->ack) {
+            cur->state = TCP_CLOSE_WAIT;
+            cur->close_reason = TCP_RESET;
+            if (cur->sk) {
+                raise_error_event(mmt, cur);
+            } else {
+                destroy_tcp_stream(mmt, cur);
+            }
+        }
+        return;
+    }
+
+    if (tcph->syn) {
+        if (tcph->ack) {
+            ret = handle_active_open(mmt, cur, cur_ts, tcph, 
+                seq, ack_seq, window);
+            if (!ret) {
+                return;
+            }
+
+            cur->snd_var->nrtx = 0;
+            cur->rcv_nxt = cur->rcv_var->irs + 1;
+            remove_from_rto_list(mmt, cur);
+            cur->state = TCP_ESTABLISHED;
+            fprintf(stderr, "stream %d: TCP_ESTABLISHED\n", cur->id);
+
+            if (cur->sk) {
+                raise_write_event(mmt, cur);
+            } else {
+                fprintf(stderr, 
+                    "stream %d: TCP_ESTABLISHED, but no socket\n", cur->id);                
+                send_tcp_packet_standalone(mmt, iph->daddr, tcph->dest, 
+                    iph->saddr, tcph->source, 0, seq + payloadlen + 1, 0, 
+                    TCP_FLAG_RST | TCP_FLAG_ACK, NULL, 0, cur_ts, 0);
+                cur->close_reason = TCP_ACTIVE_CLOSE;
+                destroy_tcp_stream(mmt, cur);
+            }
+            add_to_control_list(mmt, cur, cur_ts);
+            if (m_config.timeout > 0) {
+                add_to_timeout_list(mmt, cur);
+            }
+        } else {
+            cur->state = TCP_SYN_RECV;
+            fprintf(stderr, "stream %d: TCP_SYN_RECV\n", cur->id);
+            cur->snd_nxt = cur->snd_var->iss;
+            add_to_control_list(mmt, cur, cur_ts);
+        }
+    }
+}
 
 /* handle tcp state syn recv */
 inline void 
 handle_tcp_state_syn_recv(mmutcpd_manager_t mmt, uint32_t cur_ts, 
-    tcp_stream_t cur, struct tcphdr *tcph, uint32_t ack_seq);
+    tcp_stream_t cur, struct tcphdr *tcph, uint32_t ack_seq)
+{
+    tcp_send_vars_t snd_var = cur->snd_var;
+    tcp_recv_vars_t rcv_var = cur->rcv_var;
+    tcp_listener_t  listener;
+    uint32_t        cwnd_prev;
+    int             ret;
+    if (tcph->ack) {
+        /* check if ACK of SYN */
+        if (ack_seq != snd_var->iss + 1) {
+            fprintf(stderr, "stream %d(TCP_SYN_RECV): weird ack_seq:%u, iss:%u\n", 
+                cur->id, ack_seq, snd_var->iss);
+            fprintf(stderr, "stream %d(TCP_SYN_RECV): weird ack_seq:%u, iss:%u\n", 
+                cur->id, ack_seq, snd_var->iss);
+            return ;
+        }
+
+        snd_var->snd_una++;
+        cur->snd_nxt = ack_seq;
+        cwnd_prev = snd_var->cwnd;
+        snd_var->cwnd = ((cwnd_prev == 1) ? (snd_var->mss * 2):snd_var->mss);
+        snd_var->nrtx = 0;
+        cur->rcv_nxt = cur->rcv_var->irs + 1;
+        remove_from_rto_list(mmt, cur);
+
+        cur->state = TCP_ESTABLISHED;
+        fprintf(stderr, "stream %d: TCP_ESTABLISHED\n", cur->id);
+
+        /* update listening socket */
+        listener = mmt->listener;
+        ret = stream_enqueue(listener->acceptq, cur);
+        if (ret < 0) {
+            fprintf(stderr, "stream %d: failed to enqueue to the" 
+                "listen backlog.\n", cur->id);
+            cur->close_reason = TCP_NOT_ACCEPTED;
+            cur->state = TCP_CLOSE;
+            add_to_control_list(mmt, cur);
+        }
+
+        fprintf(stderr, "stream %d: insert into acceptq\n", cur->id);
+        if (m_config.timeout > 0) {
+            add_to_timeout_list(mmt, cur);
+        }
+
+        /* raise a event to the listening socket */
+        if (listener->sk && (listener->sk->epoll & EPOLL_IN)) {
+            add_epoll_event(mmt->ep, MMUTCPD_EVENT_QUEUE, 
+                listener->sk, EPOLL_IN);
+        }
+    } else {
+        fprintf(stderr, "stream %d: TCP_SYN_RECV, no ack.\n", cur->id);
+        /* retransmit syn/ack */
+        cur->snd_nxt = snd_var->iss;
+        add_to_control_list(mmt, cur, cur_ts);
+    }
+}
 
 /* handle tcp state established */
 inline void 
 handle_tcp_state_established(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
-    uint8_t *payload, int payloadlen, uint16_t window);
+    uint8_t *payload, int payloadlen, uint16_t window)
+{
+    if (tcph->syn) {
+        fprintf(stderr, "stream %d: (TCP_ESTABLISHED): weird SYN. "
+            "seq:%u, expected:%u, ack_seq:%u, expected:%u\n", 
+            cur->id, seq, cur->rcv_nxt, ack_seq, cur->snd_nxt);
+        cur->snd_nxt = ack_seq;
+        add_to_control_list(mmt, cur);
+        return;
+    }
+
+    if (payloadlen > 0) {
+        if (process_tcp_payload(mmt, cur, cur_ts, payload, seq, payloadlen)) {
+            /* if return is TRUE, send ACK */
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_AGGREGATE);// ??? 
+        } else {
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_NOW);
+        }
+    }
+
+    if (tcph->ack) {
+        if (cur->snd_var->sndbuf) {
+            process_ack(mmt, cur, cur_ts, tcph, 
+                seq, ack_seq, window, payloadlen);
+        }
+    }
+
+    if (tcph->fin) {
+        /* process the FIN only if the sequence is valid */
+        /* FIN packet is allowed to push payload 
+         * (should we check PSH flag ??? ) */
+        if (seq + payloadlen == cur->rcv_nxt) {
+            cur->state = TCP_CLOSE_WAIT;
+            fprintf(stderr, "stream %d: TCP_CLOSE_WAIT\n", cur->id);
+            cur->rcv_nxt++;
+            add_to_control_list(mmt, cur, cur_ts);
+            /* notify to app */
+            raise_read_event(mmt, cur);
+        } else {
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_NOW);
+            return;
+        }
+    }
+}
 
 /* handle tcp state close wait */
 inline void 
 handle_tcp_state_close_wait(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
-    int payloadlen, uint16_t window);
+    int payloadlen, uint16_t window)
+{
+    if (TCP_SEQ_LT(seq, cur->rcv_nxt)) {
+        fprintf(stderr, "stream %d(TCP_CLOSE_WAIT): weird seq:%u, "
+            "expected:%u\n", cur->id, seq, cur->rcv_nxt);
+        add_to_control_list(mmt, cur, cur_ts);
+        return;
+    }
+
+    if (cur->snd_var->sndbuf) {
+        process_ack(mmt, cur, cur_ts, tcph, seq, ack_seq, 
+            window, payloadlen);
+    }
+}
 
 /* handle tcp state last ack(to ack FIN) */
 inline void 
 handle_tcp_state_last_ack(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     const struct iphdr *iph, int ip_len, tcp_stream_t cur, 
     struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
-    int payloadlen, uint16_t window);
+    int payloadlen, uint16_t window)
+{
+    if (TCP_SEQ_LT(seq, cur->rcv_nxt)) {
+        fprintf(stderr, "stream %d(TCP_LAST_ACK): weird seq:%u, "
+            "expected:%u\n", cur->id, seq, cur->rcv_nxt);
+        return;
+    }
+
+    if (tcph->ack) {
+        if (cur->snd_var->sndbuf) {
+            process_ack(mmt, cur, cur_ts, tcph, seq, ack_seq, 
+                window, payloadlen);
+        }
+
+        if (!cur->snd_var->is_fin_sent) {
+            /* the case that FIN is not sent yet */
+            /* this is not ack for FIN, ignore */
+            return;
+        }
+
+        /* check if ACK of FIM */
+        if (ack_seq == cur->snd_var->fss + 1) {
+            cur->snd_var->snd_una++;
+            update_rto_timer(mmt, cur, cur_ts);
+            cur->state = TCP_CLOSE;
+            cur->close_reason = TCP_PASSIVE_CLOSE;
+            fprintf(stderr, "stream %d(TCP_CLOSE):\n", cur->id);
+            destroy_tcp_stream(mmt, cur, cur_ts);
+        } else {
+            fprintf(stderr, "stream %d(TCP_LAST_ACK): not ack of FIN. "
+                "ack_seq:%u, expected:%u\n", cur->id, ack_seq, 
+                cur->snd_var->fss + 1);
+            add_to_control_list(mmt, cur, cur_ts);
+        }
+    } else {
+        fprintf(stderr, "stream %d(TCP_LAST_ACK): not ack\n", cur->id);
+        add_to_control_list(mmt, cur, cur_ts);
+    }
+}
 
 /* handle tcp state fin_wait1 */
 inline void 
 handle_tcp_state_fin_wait1(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
-    uint8_t *payload, int payloadlen, uint16_t window);
+    uint8_t *payload, int payloadlen, uint16_t window)
+{
+    if (TCP_SEQ_LT(seq, cur->rcv_nxt)) {
+        fprintf(stderr, "stream %d(TCP_FIN_WAIT1): weird seq:%u, "
+            "expected:%u\n", cur->id, seq, cur->rcv_nxt);
+        add_to_control_list(mmt, cur, cur_ts);
+        return;
+    }
+
+    if (tcph->ack) {
+        if (cur->snd_var->sndbuf) {
+            process_ack(mmt, cur, cur_ts, tcph, seq, ack_seq, 
+                windowm, payloadlen);
+        }
+
+        if (cur->snd_var->is_fin_sent && 
+            ack_seq == cur->snd_var->fss + 1) {
+            cur->snd_var->snd_una = ack_seq;
+            if (TCP_SEQ_GT(ack_seq, cur->snd_nxt)) {
+                fprintf(stderr, "stream %d(TCP_FIN_WAIT1): "
+                    "update snd_nxt to %u\n", cur->id, ack_seq);
+                cur->snd_nxt = ack_seq;
+            }
+
+            cur->snd_var->nrtx = 0;
+            remove_from_rto_list(mmt, cur);
+            cur->state = TCP_FIN_WAIT2;
+            fprintf(stderr, "stream %d(TCP_FIN_WAIT2)\n", cur->id);
+        }
+    } else {
+        fprintf(stderr, "stream %d: not a ack\n", cur->id);
+        return;
+    }
+
+    if (payloadlen > 0) {
+        if (process_tcp_payload(mmt, cur, cur_ts, payload, seq, payloadlen)) {
+            /* if return is TRUE, send ACK */
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_AGGREGATE);
+        } else {
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_NOW);
+        }
+    }
+
+    if (tcph->fin) {
+        /* process the FIN only if the sequence is valid */
+        /* FIN packet is allowed to push payload */
+        if (seq + payloadlen == cur->rcv_nxt) {
+            cur->rcv_nxt++;
+
+            if (cur->state == TCP_FIN_WAIT1) {
+                cur->state = TCP_CLOSING;
+                fprintf(stderr, "stream %d(TCP_CLOSING)\n", cur->id);
+                add_to_timewait_list(mmt, cur, cur_ts);
+            } else if (cur->state == TCP_FIN_WAIT2) {
+                cur->state = TCP_TIME_WAIT;
+                fprintf(stderr, "stream %d(TCP_TIME_WAIT)\n", cur->id);
+                add_to_timewait_list(mmt, cur, cur_ts);
+            }
+            add_to_control_list(mmt, cur, cur_ts);
+        }
+    }
+}
 
 /* handle tcp state fin_wait2 */
 inline void 
 handle_tcp_state_fin_wait2(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
-    uint8_t *payload, int payloadlen, uint16_t window);
+    uint8_t *payload, int payloadlen, uint16_t window)
+{
+    
+}
 
 /* handle tcp state closing */
 inline void 
@@ -1175,6 +1888,11 @@ remove_from_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
         sender->ack_list_cnt--;
     }
 }
+
+
+/* add to timeout list */
+inline void 
+add_to_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* add to rto list */
 inline void 

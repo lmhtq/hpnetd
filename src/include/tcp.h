@@ -352,6 +352,10 @@ remove_from_send_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 inline void
 remove_from_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
+/* add to timeout list */
+inline void 
+add_to_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+
 /* add to rto list */
 inline void 
 add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
