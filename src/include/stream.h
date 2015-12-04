@@ -96,6 +96,7 @@ struct tcp_send_vars
 
     /* timestamp */
     uint32_t ts_last_ack_snd; /* last ack sent time */
+    uint32_t ts_tw_expire;    /* the time for the stream timewait expire */
 
     uint8_t  is_wack:1,       /* is ack for window adertisement? */
              ack_cnt:6;       /* num of acks to send. max 64 */
@@ -159,9 +160,11 @@ struct tcp_stream
     uint8_t  on_hash_table;
     uint8_t  on_rto_idx;
     uint8_t  on_timewait_list;
+    uint8_t  on_timeout_list;
     uint8_t  control_list_waiting;
     uint8_t  sack_permit;   /* whether peer permits SACK */
     uint8_t  saw_timestamp; /* whether peer sends timestamp */
+    uint8_t  have_reset;
 
     
     /* send/recv next */
@@ -181,7 +184,7 @@ struct tcp_stream
     struct tcp_option_vars *opt_var;
 
 };
-
+typedef struct tcp_stream tcp_stram;
 typedef struct tcp_stream * tcp_stream_t;
 
 #if 1

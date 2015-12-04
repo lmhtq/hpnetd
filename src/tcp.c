@@ -1839,18 +1839,227 @@ handle_tcp_state_fin_wait2(mmutcpd_manager_t mmt, uint32_t cur_ts,
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
     uint8_t *payload, int payloadlen, uint16_t window)
 {
-    
+    if (tcph->ack) {
+        if (cur->snd_var->sndbuf) {
+            process_ack(mmt, cur, cur_ts, tcph, 
+                seq, ack_seq, window, payloadlen);
+        }
+    } else {
+        fprintf(stderr, "stream %d: not contain ack!\n", cur->id);
+        return ;
+    }
+
+    if (payloadlen > 0) {
+        if (process_tcp_payload(mmt, cur, cur_ts, payload, seq, payloadlen)) {
+            /* if return is true, send ack */
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_AGGREGATE);
+        } else {
+            enqueue_ack(mmt, cur, cur_ts, ACK_OPT_NOW);
+        }
+    }
+
+    if (tcph->fin) {
+        /* process the FIN only if the sequence is valid */
+        /* FIN pkt is allowed to push payload (PSH ??) */
+        if (seq + payloadlen == cur->rcv_nxt) {
+            cur->rcv_nxt++;
+            fprintf(stderr, "stream %d: TCP_TIME_WAIT\n", cur->id);
+            add_to_timewait_list(mmt, cur, cur_ts);
+            add_to_control_list(mmt, cur, cur_ts);
+        }
+    }
 }
 
 /* handle tcp state closing */
 inline void 
 handle_tcp_state_closing(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
-    int payloadlen, uint16_t window);
+    int payloadlen, uint16_t window)
+{
+    if (tcph->ack) {
+        if (cur->snd_var->sndbuf) {
+            process_ack(mmt, cur, cur_ts, tcph, seq, ack_seq, 
+                window, payloadlen);
+        }
+
+        if (!cur->snd_var->is_fin_sent) {
+            fprintf(stderr, "stream %d(TCP_CLOSING):no FIN sent yet\n", 
+                cur->id);
+            return;
+        }
+
+        /* check if ACK of FIN */
+        if (ack_seq != cur->snd_var->fss + 1) {
+            /* if the packet is not ack of FIN, ignore */
+            return;
+        }
+
+        cur->snd_var->snd_una = ack_seq;
+        cur->snd_nxt = ack_seq;
+        update_rto_timer(mmt, cur, cur_ts);
+        
+        cur->state = TCP_TIME_WAIT;
+        fprintf(stderr, "stream %d(TCP_CLOSING)\n", cur->id);
+        add_to_timewait_list(mmt, cur, cur_ts);
+    } else {
+        fprintf(stderr, "stream %d(TCP_TIME_WAIT)\n", cur->id);
+        return;
+    }
+}
+
+/* handle tcp state time wait */
+inline void 
+handle_tcp_state_timewait(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur)
+{
+    if (cur->on_timewait_list) {
+        remove_from_timewait_list(mmt, cur);
+        add_to_timewait_list(mmt, cur);
+    }
+    add_to_control_list(mmt, cur, cur_ts);
+}
 
 /* process tcp packet */
 int process_tcp_packet(mmutcpd_manager_t mmt, uint32_t cur_ts, 
-    const iphdr *iph, int ip_len);
+    const iphdr *iph, int ip_len)
+{
+    struct tcphdr *tcph = (struct tcphdr*)( (u_char *)iph + (iph->ihl << 2) );
+    uint8_t       *payload = (uint8_t *)tcph + (tcph->doff << 2);
+    int           payloadlen = ip_len - (payload - (u_char *)iph);
+    tcp_stream    s_stream;/* TODO: can be optimised ?? */
+    tcp_stream_t  cur = NULL;
+    uint32_t      seq = ntohl(tcph->seq);
+    uint32_t      ack_seq = ntohl(tcph->ack_seq);
+    uint16_t      window = ntohs(tcph->window);
+    uint16_t      check;
+    int           ret;
+
+    /* check ip check invalidation */
+    /* TODO: offload to nic */
+    if (ip_len < (iph->ihl + tcph->doff) << 2 )
+        return ERROR;
+
+#if TCP_CALC_CHECKSUM /* TODO: offload */
+    check = tcp_calc_check((uint16_t *)tcph, 
+        (tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr);
+    if (check) {
+        tcph->check = 0;
+        fprintf(stderr, "stream %d: checksum failed. original, calced:\n", 
+            check, tcp_calc_check((uint16_t *)tcph, 
+                (tcph->doff << 2) + payloadlen, iph->saddr, iph->daddr));
+        return ERROR;
+    }
+#endif /* TCP_CALC_CHECKSUM */
+
+    s_stream.saddr = iph->daddr;
+    s_stream.sport = tcph->dest;
+    s_stream.daddr = iph->saddr;
+    s_stream.dport = tcph->source;
+
+    if (!(cur = search_tcp_flow_hashtable(mmt->tcp_flow_hstable, s_stream))) {
+        /* not found in flow table */
+        cur = create_new_flow_hashtable_entry(mmt, cur_ts, iph, ip_len, 
+            tcph, seq, ack_seq, payloadlen, window);
+        if (!cur) {
+            return TRUE;
+        }
+    }
+
+    /* validate sequence. if not valid, ignore the packrt */
+    if (cur->state > TCP_SYN_RECV) {
+        ret = validate_sequence(mmt, cur, cur_ts, tcph, 
+            seq, ack_seq, payloadlen);
+        if (!ret) {
+            fprintf(stderr, "stream %d: invalid seq:%u, expected:%u\n", 
+                cur->id, seq, cur->rcv_nxt);
+            return TRUE;
+        }
+    }
+
+    /* update recive window size */
+    if (tcph->syn) {
+        cur->snd_var->peer_wnd = window;
+    } else {
+        cur->snd_var->peer_wnd = (uint32_t)window << cur->snd_var->wscale; 
+    }
+
+    cur->last_active_ts = cur_ts;
+    update_timeout_list(mmt, cur_ts);
+
+    /* process RST, process here only if state > TCP_SY_SENT */
+    if (tcph->rst) {
+        cur->have_reset = TRUE;
+        if (cur->state > TCP_SYN_SENT) {
+            if (process_rst(mmt, cur, ack_seq)) {
+                return TRUE;
+            }
+        }
+    }
+
+    switch (cur->state) {
+        case TCP_LISTEN:
+            handle_tcp_state_listen(mmt, cur_ts, cur, tcph);
+            break;
+
+        case TCP_SYN_SENT:
+            handle_tcp_state_syn_sent(mmt, cur_ts, cur, iph, tcph, 
+                seq, ack_seq, payloadlen, window);
+            break;
+
+        case TCP_SYN_RECV:
+            if (tcph->syn && seq == cur->rcv_var->irs) {
+                handle_tcp_state_listen(mmt, cur_ts, cur, tcph);
+            } else {
+                handle_tcp_state_syn_recv(mmt, cur_ts, cur, tcph, ack_seq);  
+            }
+            break;
+        
+        case TCP_ESTABLISHED:
+            handle_tcp_state_established(mmt, cur_ts, cur, tcph, seq, ack_seq, 
+                payload, payloadlen, window);
+            break;
+
+        case TCP_CLOSE_WAIT:
+            handle_tcp_state_close_wait(mmt, cur_ts, cur, tcph, seq, ack_seq, 
+                payloadlen, window);
+            break;
+
+        case TCP_LAST_ACK:
+            handle_tcp_state_last_ack(mmt, cur_ts, iph, ip_len, cur, tcph, 
+                seq, ack_seq, payloadlen, window);
+            break;
+
+        case TCP_FIN_WAIT1:
+            handle_tcp_state_fin_wait1(mmt, cur_ts, cur, tcph, seq, ack_seq, 
+                payload, payloadlen, window);
+            break;
+
+        case TCP_FIN_WAIT2:
+            handle_tcp_state_fin_wait2(mmt, cur_ts, cur, tcph, seq, ack_seq, 
+                payload, payloadlen, window);
+            break;
+
+        case TCP_CLOSING:
+            handle_tcp_state_closing(mmt, cur_ts, cur, tcph, seq, ack_seq, 
+                payloadlen, window);
+            break;
+
+        case TCP_TIME_WAIT:
+            /* goto here, only when a restransmission of the remote FIN. 
+             * ack it and restart a 2MSL timeout */
+            handle_tcp_state_timewait(mmt, cur_ts, cur);
+            break;
+
+        case TCP_CLOSE:
+            break;
+
+        default :
+            break;
+
+    }
+
+    return TRUE;
+}
 #endif /* tcp_in */
 
 /* remove from control list */
@@ -1892,39 +2101,460 @@ remove_from_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
 
 /* add to timeout list */
 inline void 
-add_to_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+add_to_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
+{
+    if (cur->on_timeout_list) {
+        assert(0);
+        return;
+    }
 
-/* add to rto list */
-inline void 
-add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+    cur->on_timeout_list = TRUE;
+    TAILQ_INSERT_TAIL(&mmt->timeout_list, cur, snd_var->timeout_link);
+    mmt->timeout_list_cnt++;
+}
+
+/* remove from timeout list */
+inline void
+remove_from_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
+{
+    if (cur->on_timeout_list) {
+        cur->on_timeout_list = FALSE;
+        TAILQ_REMOVE(&mmt->timeout_list, cur, snd_var->timeout_link);
+        mmt->timeout_list_cnt--;
+    }
+}
 
 /* update timeout list */
 inline void 
 update_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
 {
-
+    if (cur->on_timeout_list) {
+        TAILQ_REMOVE(&mmt->timeout_list, cur, snd_var->timeout_link);
+        TAILQ_INSERT_TAIL(&mmt->timeout_list, cur, snd_var->timeout_link);        
+    }
 }
 
+/* check connection timeout */
+void 
+chekc_conn_timeout(mmutcpd_manager_t mmt, uint32_t cur_ts, int thresh);
+{
+    tcp_stream_t tmp;
+    tcp_stream_t next;
+    int          cnt;
 
-/* remove from rto list */
-inline void
-remove_from_rto_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+    cnt = 0;
+    for (tmp = TAILQ_FIRST(&mmt->timeout_list); tmp !=NULL; tmp = next) {
+        if (++cnt > thresh) {
+            break;
+        }
+        next = TAILQ_NEXT(tmp, snd_var->timeout_link);
 
-/* remove from timewait list */
-inline void
-remove_from_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
-
-/* remove from timeout list */
-inline void
-remove_from_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
-
-
-/* update retransmission timer */
-inline void
-update_rto_timer(tcp_stream_t cur, cur_ts);
+        if ((int32_t)(cur_ts - tmp->last_active_ts) >= TCP_TIMEOUT_VAL ) {
+            tmp->on_timeout_list = FALSE;
+            TAILQ_REMOVE(&mmt->timeout_list, tmp, snd_var->timeout_link);
+            mmt->timeout_list_cnt--;
+            tmp->state = TCP_TIMEOUT;
+            if (tmp->sk) {
+                raise_error_event(mmt, cur);
+            } else {
+                destroy_tcp_stream(mmt, cur);
+            }
+        } else {
+            break;
+        }
+    }
+}
 
 /* add to timewait list */
 include void 
-add_to_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts);
+add_to_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts)
+{
+    cur->rcv_var->ts_tw_expire = cur_ts + TCP_TIMEWAIT_VAL;
+
+    if (cur->on_timewait_list) {
+        /* update list in sorted way by ts_tw_expire */
+        TAILQ_REMOVE(&mmt->timewait_list, cur, snd_var->timer_link);
+        TAILQ_INSERT_TAIL(&mmt->timewait_list, cur, snd_var->timer_link);
+    } else {
+        if (cur->on_rto_idx >= 0) {
+            remove_from_rto_list(mmt, cur);
+        }
+
+        cur->on_timewait_list = TRUE;
+        TAILQ_INSERT_TAIL(&mmt->timewait_list, cur, snd_var->timer_link);
+        mmt->timewait_list_cnt++;
+    }
+
+}
+
+/* remove from timewait list */
+inline void
+remove_from_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
+{
+    if (!cur->on_timewait_list) {
+        assert(0);
+        return ;
+    }
+
+    TAILQ_REMOVE(mmt->timewait_list, cur, snd_var->timer_link);
+    cur->on_timewait_list = FALSE;
+    mmt->timewait_list_cnt--;
+}
+
+/* check timewait expire */
+void 
+check_timewait_expire(mmutcpd_manager_t mmt, uint32_t cur_ts, int thresh)
+{
+    tcp_stream_t tmp;
+    tcp_stream_t next;
+    int          cnt = 0;
+
+    for (tmp = TAILQ_FIRST(&mmt->timewait_list); tmp !=NULL; tmp = next) {
+        if (++cnt > thresh) {
+            break;
+        }
+        next = TAILQ_NEXT(tmp, snd_var->timer_link);
+        fprintf(stderr, "stream %d: inside check timewait list. cnt:%u\n", 
+            cur->id, cnt);
+        if (tmp->on_timewait_list) {
+            if ((int32_t)(cur_ts - tmp->rcv_var->ts_tw_expire) >= 0 ) {
+                if (!tmp->snd_var->on_control_list) {
+                    TAILQ_REMOVE(&mmt->timewait_list, tmp, timer_link);
+                    tmp->on_timewait_list = FALSE;
+                    mmt->timewait_list_cnt--;
+
+                    tmp->state = TCP_CLOSE;
+                    tmp->close_reason = TCP_ACTIVE_CLOSE;
+                    fprintf(stderr, "stream %d: TCP_CLOSE.%s\n", cur->id);
+                    destroy_tcp_stream(mmt, tmp);
+                }
+            } else {
+                break;
+            }
+        } else {
+            fprintf(stderr, "stream %d: not on timewait_list.\n", tmp->id);
+        }
+    }
+}
+
+/* init rto_hashstore in mmutcpd, named rto_store */
+rto_hashstore_t
+init_rto_hashstore()
+{
+    int i;
+    rto_hashstore_t hs = calloc(1, sizeof(struct rto_hashstore));
+    if (!hs) {
+        fprintf(stderr, "calloc: init_rto_hashstore%s\n", );
+        return 0;
+    }
+
+    for (i = 0; i < RTO_HASH; i++) {
+        TAILQ_INIT(&hs->rto_list[i]);
+    }
+
+    TAILQ_INIT(&hs->rto_list[RTO_HASH]);
+    return hs;
+}
+
+/* add to rto list */
+inline void 
+add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
+{
+    if (!mmt->rto_list_cnt) {
+        mmt->rto_store->rto_now_idx = 0;
+        mmt->rto_store->rto_now_ts = cur->snd_var->ts_rto;
+    }
+
+    if (cur->on_rto_idx < 0) {
+        if (cur->on_timewait_list) {
+            /* cant be both in tw_list and rto_list */
+            return;
+        }
+
+        int diff = (int32_t)(cur->snd_var->ts_rto - mmt->rto_store->rto_now_ts);
+        if (diff < RTO_HASH) {
+            int offset = (diff + mmt->rto_store->rto_now_idx) % RTO_HASH;
+            cur->on_rto_idx = offset;
+            TAILQ_INSERT_TAIL(&mmt->rto_store->rto_list[offset], 
+                cur, snd_var->timer_link);
+        } else {
+            cur->on_rto_idx = RTO_HASH;
+            TAILQ_INSERT_TAIL(&mmt->rto_store->rto_list[RTO_HASH], 
+                cur, snd_var->timer_link);
+        }
+        mmt->rto_list_cnt++;
+    }
+}
+
+/* remove from rto list */
+inline void
+remove_from_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur)
+{
+    if (cur->on_rto_idx < 0) {
+        return ;
+    }
+
+    TAILQ_REMOVE(&mmt->rto_store->rto_list[cur->on_rto_idx], 
+        cur, snd_var->timer_link);
+    cur->on_rto_idx = -1;
+
+    mmt->rto_list_cnt--;
+}
+
+/* update retransmission timer */
+inline void
+update_rto_timer(tcp_stream_t cur, cur_ts)
+{
+    /* update the retransmission timer */
+    assert(cur->snd_var->rto > 0);
+    cur->snd_var->nrtx = 0;
+
+    /* if in rto list, remove it */
+    if (cur->on_rto_idx >= 0) {
+        remove_from_rto_list(mmt, cur);
+    }
+
+    /* reset retransmission timeout */
+    if (TCP_SEQ_GT(cur->snd_nxt, cur->snd_var->snd_una)) {
+        /* there are packets sent but not acked, update rto timestamp */
+        cur->snd_var->ts_rto = cur_ts + cur->snd_var->rto;
+        add_to_rto_list(mmt, cur);
+    } else {
+        /* all packet are acked */
+        fprintf(stderr, "stream %d: all packet are acked. snd_una:%u " 
+            "snd_nxt:%u\n", cur->snd_var->snd_una, cur->snd_nxt);
+    }
+}
+
+
+/* handle rto 
+ * a important function */
+inline int 
+handle_rto(mmutcpd_manager_t mmt, uint32_t cur_ts, tcp_stream_t cur)
+{
+    uint8_t backoff;
+
+    fprintf(stderr, "stream %d:timeout. rto:%u(%ums), snd_una:%u, snd_nxt:%u\n", 
+        cur->id, cur->snd_var->rto, TS_TO_MSEC(cur->snd_var->rto), 
+        cur->snd_var->snd_una, cur->snd_nxt);
+    assert(cur->snd_var->rto > 0);
+
+    /* count number of retransmission */
+    if (cur->snd_var->nrtx < TCP_MAX_RTX) {
+        cur->snd_var->nrtx++;
+    } else {
+        /* if it exceeds the threshold, destroy and notify to app */
+        fprintf(stderr, "stream %d:exceeds TCP_MAX_RTX\n", cur->id);
+        if (cur->state < TCP_ESTABLISHED) {
+            cur->state = TCP_CLOSE;
+            cur->close_reason = TCP_CONN_FAIL;
+            destroy_tcp_stream(mmt, cur);
+        } else {
+            cur->state = TCP_CLOSE;
+            cur->state->close_reason = TCP_CONN_LOST;
+            if (cur->sk) {
+                raise_error_event(mmt, cur);
+            } else {
+                destroy_tcp_stream(mmt, cur);
+            }
+        }
+
+        return ERROR;
+    }
+
+    if (cur->snd_var->nrtx > cur->snd_var->max_nrtx) {
+        cur->snd_var->max_nrtx = cur->snd_var->nrtx;
+    }
+
+    /* update rto timestamp */
+    if (cur->state >= TCP_ESTABLISHED) {
+        uint32_t rto_prev;
+        backoff = MIN(cur->snd_var->nrtx, TCP_MAX_BACKOFF);
+
+        rto_prev = cur->snd_var->rto;
+        cur->snd_var->rto = 
+            ((cur->rcv_var->srtt >> 3) + cur->rcv_var->rttvar) << backoff;
+        if (cur->snd_var->rto <= 0) {
+            fprintf(stderr, "stream %d(%s):current rto:%u, prev:%u\n", 
+                cur->id, tcp_state_str[cur->state], 
+                cur->snd_var->rto, rto_prev);
+            cur->snd_var->rto = rto_prev;
+        }
+    }
+    cur->snd_var->ts_rto = cur_ts + cur->snd_var->rto;
+
+    /* reduce congestion window and ssthresh */
+    cur->snd_var->ssthresh = MIN(cur->snd_var->cwnd, cur->snd_var->peer_wnd) / 2;
+    if (cur->snd_var->ssthresh < (2*cur->snd_var->mss)) {
+        cur->snd_var->ssthresh = cur->snd_var->mss * 2;
+    }
+    cur->snd_var->cwnd = cur->snd_var->mss;
+    fprintf(stderr, "stream %d: timeout. cwnd:%u, ssthresh:%u\n", cur->id, 
+        cur->snd_var->cwnd, cur->snd_var->ssthresh);
+
+    /* retransmission */
+    switch (cur->state) {
+        case TCP_SYN_SENT:/* SYN lost */
+            if (cur->snd_var->nrtx > TCP_MAX_SYN_RETRY) {
+                cur->state = TCP_CLOSE;
+                cur->close_reason = TCP_CONN_FAIL;
+                fprintf(stderr, "stream %d: SYN retries "
+                    "exceeds max retries\n", cur->id);
+                if (cur->sk) {
+                    raise_error_event(mmt, cur);
+                } else {
+                    destroy_tcp_stream(mmt, cur);
+                }
+                return ERROR;
+            }
+            fprintf(stderr, "stream %d: re_xmit SYN. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        case TCP_SYN_RECV:/* SYN/ACK lost */
+            fprintf(stderr, "stream %d: re_xmit SYN/ACK. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        case TCP_ESTABLISHED:/* data lost */
+            fprintf(stderr, "stream %d: re_xmit data. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        case TCP_CLOSE_WAIT:/* data lost */
+            fprintf(stderr, "stream %d: re_xmit data. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        case TCP_LAST_ACK:/* FIN/ACK lost */
+            fprintf(stderr, "stream %d: re_xmit FIN/ACK. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        case TCP_FIN_WAIT1:/* FIN lost */
+            fprintf(stderr, "stream %d: re_xmit FIN. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        case TCP_CLOSING:/* ACK lost */
+            fprintf(stderr, "stream %d: re_xmit ACK(at closing state). "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, cur->snd_nxt, 
+                cur->snd_var->snd_una);
+            break;
+
+        default:
+            fprintf(stderr, "stream %d(%s): weird state:. "
+                "snd_nxt:%u, snd_una:%u\n", cur->id, tcp_state_str[cur->state],
+                cur->snd_nxt, cur->snd_var->snd_una);
+            assert(0);
+            return ERROR;
+    }
+
+    cur->snd_nxt = cur->snd_var->snd_una;
+    if (cur->state == TCP_ESTABLISHED || cur->state == TCP_CLOSE_WAIT) {
+        /* re_xmit data at established state */
+        add_to_send_list(mmt, cur);
+    } else if (cur->state == TCP_FIN_WAIT1 || 
+        cur->state == TCP_CLOSING || cur->state == TCP_LAST_ACK) {
+        if (cur->snd_var->fss == 0) {
+            fprintf(stderr, "stream %d: fss not set\n", cur->id);
+        }
+        /* decide to re_xmit data or ctrl pkt */
+        if (TCP_SEQ_LT(cur->snd_nxt, cur->snd_var->fss)) {
+            /* need to re_xmit data */
+            if (cur->snd_var->on_control_list) {
+                remove_from_control_list(mmt, cur);
+            }
+            cur->control_list_waiting = TRUE;
+            add_to_send_list(mmt, cur);
+        } else {
+            /* need to control pkt */
+            add_to_control_list(mmt, cur, cur_ts);
+        }
+    } else {
+        add_to_control_list(mmt, cur, cur_ts);
+    }
+
+    return 0;
+}
+
+/* rearange rto store */
+inline void 
+rearrange_rto_store(mmutcpd_manager_t mmt)
+{
+    tcp_stream_t     tmp;
+    tcp_stream_t     next;
+    struct rto_head* rto_list = &mmt->rto_store->rto_list[RTO_HASH];
+    int              cnt = 0;
+
+    for (tmp = TAILQ_FIRST(rto_list); tmp != NULL; tmp = next) {
+        next = TAILQ_NEXT(tmp, snd_var->timer_link);
+        int diff = (int32_t)(mmt->rto_store->rto_now_ts - tmp->snd_var->ts_rto);
+        if (diff < RTO_HASH) {
+            int offset = (diff + mmt->rto_store->rto_now_idx) % RTO_HASH;
+            TAILQ_REMOVE(&mmt->rto_store->rto_list[RTO_HASH], 
+                tmp, snd_var->timer_link);
+            tmp->on_rto_idx = offset;
+            TAILQ_INSERT_TAIL(&mmt->rto_store->rto_list[offset], 
+                tmp, snd_var->timer_link);
+        }
+        cnt++;
+    }
+}
+
+/* check retransmission timeout */
+void
+check_rto_timeout(mmutcpd_manager_t mmt, uint32_t cur_ts, int thresh)
+{
+    tcp_stream_t tmp;
+    tcp_stream_t next;
+    /* TODO: learn this writing way */
+    struct       rto_head* rto_list;
+    int          cnt  = 0;
+    int          ret;
+
+    if (!mmt->rto_list_cnt) {
+        return;
+    }
+
+    while (1) {
+        rto_list = &mmt->rto_store->rto_list[mmt->rto_store->rto_now_idx];
+        if ((int32_t)(cur_ts - mmt->rto_store->rto_now_ts) < 0) {
+            break;
+        }
+
+        for (tmp = TAILQ_FIRST(rto_list); tmp != NULL; tmp = next) {
+            if (++cnt > thresh) {
+                break;
+            }
+            next = TAILQ_NEXT(tmp, timer_link);
+            fprintf(stderr, "stream %d: in rto_list. cnt:%u\n", cur->id, cnt);
+            if (tmp->on_rto_idx >= 0) {
+                ret = handle_rto(mmt, cur_ts, tmp);
+                TAILQ_REMOVE(rto_list, tmp, snd_var->timer_link);
+                mmt->rto_list_cnt--;
+                tmp->on_rto_idx = -1;
+            } else {
+                fprintf(stderr, "stream %d: not on a rto list\n", cur->id);
+            }
+        }
+
+        if (cnt > thresh) {
+            break
+        } else {
+            mmt->rto_store->rto_now_idx = ( mmt->rto_store->rto_now_idx + 1) % RTO_HASH;
+            mmt->rto_store->rto_now_ts++;
+            if (!(mmt->rto_store->rto_now_idx % 1000)) {
+                rearrange_rto_store(mmt);
+            }
+        }
+    }
+}
 
 #endif /* tcp_out */

@@ -51,7 +51,7 @@
 #define USEC_TO_TS(t)     ((t)/1000)
 #define SEC_TO_TS(t)      ((t)*1000)
 
-#define TCP_TIMEWAIT_VAL  (0)   //0ms
+#define TCP_TIMEWAIT_VAL  (5000)   //0ms
 #define TCP_INIT_RTO_VAL  (500) //500ms
 #define TCP_FIN_RTO_VAL   (500) //500ms
 #define TCP_TIMEOUT_VAL   (500) //500ms
@@ -59,6 +59,8 @@
 #define TCP_MAX_RTX       16
 #define TCP_MAX_SYN_RETRY 7
 #define TCP_MAX_BACKOFF   7
+
+#define RTO_HASH 3000
 
 enum tcp_state
 {
@@ -136,8 +138,17 @@ struct tcp_timestamp
 {
     uint32_t ts_val;
     uint32_t ts_ref;
-}
+};
 typedef struct tcp_timestamp * tcp_timestamp_t;
+
+struct rto_hashstore
+{
+    uint32_t rto_now_idx; /* pointing to the hs_table_s index */
+    uint32_t rto_now_ts;
+
+    TAILQ_HEAD(rto_head, tcp_stream) rto_list[RTO_HASH + 1];
+};
+typedef struct rto_hashstore * rto_hashstore_t;
 
 #if 1
 /* tcp_out */
@@ -335,6 +346,11 @@ handle_tcp_state_closing(mmutcpd_manager_t mmt, uint32_t cur_ts,
     tcp_stream_t cur, struct tcphdr *tcph, uint32_t seq, uint32_t ack_seq, 
     int payloadlen, uint16_t window);
 
+/* handle tcp state time wait */
+inline void 
+handle_tcp_state_timewait(mmutcpd_manager_t mmt, uint32_t cur_ts, 
+    tcp_stream_t cur);
+
 /* process tcp packet */
 int process_tcp_packet(mmutcpd_manager_t mmt, uint32_t cur_ts, 
     const iphdr *iph, int ip_len);
@@ -356,32 +372,56 @@ remove_from_ack_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 inline void 
 add_to_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
-/* add to rto list */
-inline void 
-add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+/* remove from timeout list */
+inline void
+remove_from_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* update timeout list */
 inline void 
 update_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
-/* remove from rto list */
-inline void
-remove_from_rto_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+/* check connection timeout */
+void 
+chekc_conn_timeout(mmutcpd_manager_t mmt, uint32_t cur_ts, int thresh);
+
+/* add to timewait list */
+include void 
+add_to_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts);
 
 /* remove from timewait list */
 inline void
-remove_from_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+remove_from_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
-/* remove from timeout list */
+/* check timewait expire */
+void 
+check_timewait_expire(mmutcpd_manager_t mmt, uint32_t cur_ts, int thresh);
+
+/* init rto_hashstore in mmutcpd, named rto_store */
+rto_hashstore_t
+init_rto_hashstore();
+
+/* add to rto list */
+inline void 
+add_to_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
+
+/* remove from rto list */
 inline void
-remove_from_timeout_list(mmutcpd_manager_t mmt, tcp_stream_t stream);
+remove_from_rto_list(mmutcpd_manager_t mmt, tcp_stream_t cur);
 
 /* update retransmission timer */
 inline void
 update_rto_timer(tcp_stream_t cur, cur_ts);
 
-/* add to timewait list */
-include void 
-add_to_timewait_list(mmutcpd_manager_t mmt, tcp_stream_t cur, uint32_t cur_ts);
+/* handle rto */
+inline int 
+handle_rto(mmutcpd_manager_t mmt, uint32_t cur_ts, tcp_stream_t cur);
+
+/* rearange rto store */
+inline void 
+rearrange_rto_store(mmutcpd_manager_t mmt);
+
+/* check retransmission timeout */
+void
+check_rto_timeout(mmutcpd_manager_t mmt, uint32_t cur_ts, int thresh);
 
 #endif /* _TCP_H_ */
