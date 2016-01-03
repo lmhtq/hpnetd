@@ -40,18 +40,16 @@ typedef struct mmutcpd_sender * mmutcpd_sender_t;
 
 struct mmutcpd_manager
 {
-    /* TODO */
-    mempool_t     flow_pool;          /* pool for tcp_stream */
-    mempool_t     recv_vars_pool;     /* pool for recv vars */
-    mempool_t     send_vars_pool;     /* pool for send vars */
-    mempool_t     monitor_vars_pool;  /* pool for monitor vars */
+    mem_pool_t     flow_pool;          /* pool for tcp_stream */
+    mem_pool_t     recv_vars_pool;     /* pool for recv vars */
+    mem_pool_t     send_vars_pool;     /* pool for send vars */
+    mem_pool_t     monitor_vars_pool;  /* pool for monitor vars */
 
     /* TODO */
     send_buffer_manager_t rbm_snd;
     recv_buffer_manager_t rbm_rcv;
 
-    /* TODO */
-    flow_hash_table_t tcp_flow_table;
+    tcp_flow_hashtable_t tcp_flow_hstable;
 
     uint32_t     s_index:24;          /* stream index */
     socket_map_t smap;
@@ -66,7 +64,7 @@ struct mmutcpd_manager
     mmutcpd_thread_context_t ctx;
 
     /* vars for event */
-    struct epool *ep;
+    struct epoll *ep;
     uint32_t     ts_last_event;
 
     struct tcp_listener *listener;
@@ -108,9 +106,122 @@ struct mmutcpd_manager
 
     /* TODO */
     struct io_module_func *iom;
+
+    /* socket queue */
+    socket_queue_t socketq;
 };
 typedef struct mmutcpd_manager * mmutcpd_manager_t;
 
+
+/* Global variables ! */
 mmutcpd_manager_t g_mmutcpd[MAX_CPUS];
+mmutcpd_thread_context_t g_pctx[MAX_CPUS];
+
+pthread_t g_thread[MAX_CPUS];
+sem_t     g_init_sem[MAX_CPUS];
+int       running[MAX_CPUS];
+
+typedef void (*mmutcpd_sighandler_t) (int);
+mmutcpd_sighandler_t app_signal_handler;
+int sigint_cnt[MAX_CPUS];
+struct timeval sigint_ts[MAX_CPUS];
+
+/* handle the signal */
+void 
+handle_signal(int signal);
+
+/* register signal */
+mmutcpd_sighandler_t 
+mmutcpd_register_signal(int signum, mmutcpd_sighandler_t handler);
+
+/* attach device */
+int 
+attach_device(mmutcpd_thread_context_t ctx);
+
+/* STAT */
+inline void 
+init_stat_counter(stat_counter_t counter);
+
+inline void 
+update_state_counter(stat_counter_t counter, int64_t val);
+
+inline uint64_t 
+get_average_stat(stat_counter_t counter);
+
+inline int64_t 
+time_diff_us(struct timeval *t2, struct timeval *t1);
+
+inline void 
+print_thread_net_stat(mmutcpd_manager_t mmutcpd, net_stat_t ns);
+
+inline void 
+print_thread_round_stat(mmutcpd_manager_t mmutcpd, run_stat_t rs);
+
+inline void 
+print_thread_round_time(mmutcpd_manager_t mmutcpd);
+
+inline void 
+print_event_stat(int core, epoll_stat_t stat);
+
+inline void 
+print_net_stat(mmutcpd_manager_t mmutcpd, uint32_t cur_ts);
+
+/* process events */
+/* flush epoll event */
+inline void 
+flush_epoll_event(mmutcpd_manager_t mmutcpd, uint32_t cur_ts);
+
+/* handle app calls */
+inline void 
+handle_app_calls(mmutcpd_manager_t mmutcpd, uint32_t cur_ts);
+
+/* write packets to chunks */
+inline void 
+write_pkt_to_chunks(mmutcpd_manager_t mmutcpd, uint32_t cur_ts);
+
+/* interrupt app */
+void 
+interrupt_app(mmutcpd_manager_t mmutcpd);
+
+/* create sender */
+mmutcpd_sender_t 
+create_mmutcpd_sender(int ifidx);
+
+/* destroy sender */
+destroy_mmutcpd_sender(mmutcpd_sender_t sender);
+
+/* mmutcpd destroy */
+void 
+mmutcpd_destroy();
+
+/* mmutcpd init */
+int 
+mmutcpd_init(char *config);
+
+/* mmutcpd get conf */
+int 
+mmutcpd_get_conf();
+
+/* mmutcpd set conf */
+int 
+mmutcpd_set_conf();
+
+/* functions */
+mmutcpd_manager_t 
+init_mmutcpd_manager(mmutcpd_thread_context_t mmutcpd_ctx);
+
+/* create thread */
+mmutcpd_create_context(int cpu);
+/* destroy thread */
+mmutcpd_destroy_context(int cpu);
+
+/* mmutcpd run thread */
+void * 
+mmutcpd_run_thread(void *arg);
+
+/* run main loop */
+void 
+run_main_loop(mmutcpd_thread_context_t ctx);
+
 
 #endif
